@@ -1,0 +1,4 @@
+pywin32>=306
+pydantic>=2.7.0
+fastapi>=0.111.0
+uvicorn>=0.30.0
