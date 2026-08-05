@@ -1,53 +1,43 @@
 # Master Implementation Plan - CorelDRAW AI Plugin Agent
 
-Kế hoạch chi tiết xây dựng hệ thống **CorelDRAW AI Plugin Agent** cho phép AI tự động thiết kế Bảng hiệu, Banner quảng cáo, Poster và Thiệp theo chuẩn in ấn CMYK trực tiếp trên phần mềm CorelDRAW (2020-2023).
+Mục tiêu là xây dựng local automation bridge cho phép AI Agent thiết kế bảng hiệu, banner, poster và thiệp trực tiếp trong CorelDRAW bằng lệnh JSON.
 
----
+## MVP 1.2.0 — hoàn tất
 
-## 🏗️ Tổng Quan Kiến Trúc (Architecture)
+- [x] Kết nối `CorelDRAW.Application` qua pywin32.
+- [x] Tự dùng active document hoặc tạo document mới.
+- [x] Tạo màu CMYK `0-100`.
+- [x] Tạo rectangle, ellipse và artistic text.
+- [x] Đặt tên shape để AI tham chiếu ở lệnh tiếp theo.
+- [x] Chỉnh outline CMYK.
+- [x] Group shape theo tên.
+- [x] Xuất PDF bằng `PublishToPDF`.
+- [x] Xuất PNG preview bằng `ExportEx`.
+- [x] FastAPI validation và error response thống nhất.
+- [x] Tài liệu payload trong `COREL_AI_COMMANDS.md`.
+- [x] Unit/API test bằng COM mock.
+- [x] GitHub Actions chạy test trên Python 3.10-3.12.
 
+## Kiến trúc hiện tại
+
+```text
+AI Agent
+  -> FastAPI / Pydantic
+  -> CorelDrawBridge + ExtendedCorelDrawBridge
+  -> Win32 COM Automation
+  -> CorelDRAW 2020-2023
 ```
-[AI Vision-Action Agent / Codex]
-               │ (JSON CMYK Commands)
-               ▼
-[FastAPI Local Server: main.py]
-               │ (Pydantic Validation)
-               ▼
-[CorelDRAW COM Bridge: corel_bridge.py]
-               │ (Win32 COM Automation)
-               ▼
-[CorelDRAW 2020-2023 Application Canvas .CDR]
-```
 
----
+## Phase tiếp theo
 
-## 🎯 Phạm Vi & Yêu Cầu Kỹ Thuật
+Các mục dưới đây chưa thuộc MVP hiện tại:
 
-1. **Phiên bản hỗ trợ**: CorelDRAW 2020 / 2021 / 2022 / 2023 (Windows 64-bit).
-2. **Chuẩn màu sắc**: Chuẩn màu **CMYK** dành cho in ấn ngành quảng cáo (`C, M, Y, K` 0-100%).
-3. **Các nhóm lệnh AI hỗ trợ**:
-   - `create_rectangle_cmyk(x, y, w, h, c, m, y, k)`: Tạo khung bảng hiệu, background.
-   - `create_ellipse_cmyk(x, y, r, c, m, y, k)`: Tạo bo tròn, họa tiết trang trí.
-   - `create_artistic_text(text, x, y, font_name, font_size, c, m, y, k)`: Tạo tiêu đề, hotline, địa chỉ trên bảng hiệu.
-   - `group_shapes(shape_names)`: Nhóm các lớp thiết kế thành Group.
-   - `export_to_pdf_or_image(filepath, format)`: Tự động xuất file in PDF/EPS hoặc PNG xem thử.
-
----
-
-## 📁 Detailed Task Breakdown for Codex
-
-### Task 1: Module `corel_bridge.py` Upgrade
-- Hỗ trợ kết nối Win32 COM với `CorelDRAW.Application`.
-- Hàm `CreateCMYKColor(c, m, y, k)` khởi tạo màu in ấn chuẩn.
-- Các hàm vẽ vector: `create_rectangle`, `create_ellipse`, `create_artistic_text`.
-
-### Task 2: Module `main.py` REST API Server
-- Định nghĩa Pydantic Models cho màu CMYK.
-- Thêm REST Endpoints:
-  - `POST /api/v1/corel/shape/rectangle`
-  - `POST /api/v1/corel/shape/ellipse`
-  - `POST /api/v1/corel/text/artistic`
-  - `POST /api/v1/corel/export`
-
-### Task 3: Command Documentation (`COREL_AI_COMMANDS.md`)
-- Tạo tài liệu mẫu danh sách câu lệnh JSON chuẩn để AI Agent tra cứu khi thiết kế.
+- Batch command/transaction để tạo cả layout trong một request.
+- Layer management: tạo, đổi tên, khóa, ẩn và sắp xếp layer.
+- Import bitmap/logo và PowerClip.
+- Polygon, curve, Bezier và boolean operations.
+- Align/distribute, rotate, resize và z-order.
+- Paragraph text, text fitting và font fallback.
+- Save `.cdr`, template và versioning thiết kế.
+- Authentication nếu API cần mở ra ngoài localhost.
+- Smoke test tự động trên Windows có CorelDRAW thật.
