@@ -9,7 +9,6 @@ from corel_bridge import CorelDrawBridge, CorelDrawBridgeError, corel_bridge
 
 ExportFormat = Literal["pdf", "png"]
 
-# Stable CorelDRAW enum values across the supported 2020-2023 versions.
 CDR_PNG = 802
 CDR_CURRENT_PAGE = 1
 CDR_RGB_COLOR_IMAGE = 4
@@ -28,11 +27,8 @@ class ExtendedCorelDrawBridge:
         y: int,
         k: int,
     ) -> str:
-        """Set a shape outline width and CMYK color."""
-
         with self.bridge.session() as (app, doc):
-            layer = doc.ActivePage.ActiveLayer
-            shape = self.bridge._find_shape(layer, shape_name)
+            shape = self.bridge._find_shape_in_document(doc, shape_name)
             shape.Outline.Width = width
             shape.Outline.Color = self.bridge._create_cmyk_color(app, c, m, y, k)
             return str(shape.Name)
@@ -40,28 +36,24 @@ class ExtendedCorelDrawBridge:
     def group_shapes_by_names(
         self, shape_names: Iterable[str], group_name: Optional[str] = None
     ) -> str:
-        """Group all named shapes and return the resulting group name."""
-
         names = list(dict.fromkeys(shape_names))
         if len(names) < 2:
             raise CorelDrawBridgeError("Cần ít nhất 2 shape để tạo group.")
 
         with self.bridge.session() as (app, doc):
-            layer = doc.ActivePage.ActiveLayer
             shapes_range = app.CreateShapeRange()
             missing: list[str] = []
-
             for name in names:
                 try:
-                    shapes_range.Add(self.bridge._find_shape(layer, name))
+                    shapes_range.Add(
+                        self.bridge._find_shape_in_document(doc, name)
+                    )
                 except CorelDrawBridgeError:
                     missing.append(name)
-
             if missing:
                 raise CorelDrawBridgeError(
                     "Không tìm thấy shape: " + ", ".join(missing)
                 )
-
             grouped_shape = shapes_range.Group()
             return self.bridge._assign_shape_name(
                 grouped_shape, group_name, "group"
@@ -84,8 +76,6 @@ class ExtendedCorelDrawBridge:
         export_format: ExportFormat = "pdf",
         dpi: int = 300,
     ) -> str:
-        """Export the active document to print PDF or RGB PNG preview."""
-
         path = self._prepare_export_path(file_path, export_format)
 
         with self.bridge.session() as (app, doc):
@@ -109,8 +99,6 @@ class ExtendedCorelDrawBridge:
         return str(path)
 
     def export_to_pdf(self, file_path: str) -> bool:
-        """Backward-compatible wrapper used by the original project."""
-
         self.export_document(file_path, "pdf")
         return True
 
