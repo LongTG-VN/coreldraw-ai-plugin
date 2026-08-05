@@ -1,74 +1,122 @@
-"""
-Module mở rộng cho CorelDRAW AI Bridge.
-Cung cấp các hàm vẽ Vector nâng cao, quản lý Layer, Nhóm đối tượng (Grouping),
-Cài đặt đường viền Outline CMYK và Xuất file PDF / PNG.
-"""
-import sys
-from typing import Optional, List
-from corel_bridge import corel_bridge
+"""Advanced CorelDRAW operations: outline, grouping, and export."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Iterable, Literal, Optional
+
+from corel_bridge import CorelDrawBridge, CorelDrawBridgeError, corel_bridge
+
+ExportFormat = Literal["pdf", "png"]
+
+# Stable CorelDRAW enum values across the supported 2020-2023 versions.
+CDR_PNG = 802
+CDR_CURRENT_PAGE = 1
+CDR_RGB_COLOR_IMAGE = 4
+
 
 class ExtendedCorelDrawBridge:
-    def __init__(self, bridge=corel_bridge):
+    def __init__(self, bridge: CorelDrawBridge = corel_bridge) -> None:
         self.bridge = bridge
 
-    def set_shape_outline_cmyk(self, shape_name: str, width: float, c: int, m: int, y: int, k: int) -> bool:
-        """Đổi màu sắc và độ dày đường viền (Outline) chuẩn CMYK cho một đối tượng."""
-        if not self.bridge.app or not self.bridge.doc:
-            if not self.bridge.connect():
-                return False
-        try:
-            layer = self.bridge.doc.ActivePage.ActiveLayer
-            shape = layer.Shapes.Item(shape_name)
-            if shape:
-                shape.Outline.Width = width
-                cmyk_color = self.bridge._create_cmyk_color(c, m, y, k)
-                shape.Outline.Color = cmyk_color
-                return True
-            return False
-        except Exception as e:
-            print(f"Error setting outline CMYK: {e}")
-            return False
+    def set_shape_outline_cmyk(
+        self,
+        shape_name: str,
+        width: float,
+        c: int,
+        m: int,
+        y: int,
+        k: int,
+    ) -> str:
+        """Set a shape outline width and CMYK color."""
 
-    def group_shapes_by_names(self, shape_names: List[str]) -> Optional[str]:
-        """Gom nhóm (Group) danh sách các Shape tên chỉ định thành 1 Group duy nhất."""
-        if not self.bridge.app or not self.bridge.doc:
-            if not self.bridge.connect():
-                return None
-        try:
-            layer = self.bridge.doc.ActivePage.ActiveLayer
-            shapes_range = layer.CreateShapeRange()
-            for name in shape_names:
+        with self.bridge.session() as (app, doc):
+            layer = doc.ActivePage.ActiveLayer
+            shape = self.bridge._find_shape(layer, shape_name)
+            shape.Outline.Width = width
+            shape.Outline.Color = self.bridge._create_cmyk_color(app, c, m, y, k)
+            return str(shape.Name)
+
+    def group_shapes_by_names(
+        self, shape_names: Iterable[str], group_name: Optional[str] = None
+    ) -> str:
+        """Group all named shapes and return the resulting group name."""
+
+        names = list(dict.fromkeys(shape_names))
+        if len(names) < 2:
+            raise CorelDrawBridgeError("Cần ít nhất 2 shape để tạo group.")
+
+        with self.bridge.session() as (app, doc):
+            layer = doc.ActivePage.ActiveLayer
+            shapes_range = app.CreateShapeRange()
+            missing: list[str] = []
+
+            for name in names:
                 try:
-                    s = layer.Shapes.Item(name)
-                    if s:
-                        shapes_range.Add(s)
-                except Exception:
-                    pass
-            
-            if shapes_range.Count > 0:
-                grouped_shape = shapes_range.Group()
-                return grouped_shape.Name
-            return None
-        except Exception as e:
-            print(f"Error grouping shapes: {e}")
-            return None
+                    shapes_range.Add(self.bridge._find_shape(layer, name))
+                except CorelDrawBridgeError:
+                    missing.append(name)
+
+            if missing:
+                raise CorelDrawBridgeError(
+                    "Không tìm thấy shape: " + ", ".join(missing)
+                )
+
+            grouped_shape = shapes_range.Group()
+            return self.bridge._assign_shape_name(
+                grouped_shape, group_name, "group"
+            )
+
+    @staticmethod
+    def _prepare_export_path(file_path: str, export_format: ExportFormat) -> Path:
+        path = Path(file_path).expanduser()
+        expected_suffix = f".{export_format}"
+        if path.suffix.lower() != expected_suffix:
+            path = path.with_suffix(expected_suffix)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path.resolve()
+
+    def export_document(
+        self,
+        file_path: str,
+        export_format: ExportFormat = "pdf",
+        dpi: int = 300,
+    ) -> str:
+        """Export the active document to print PDF or RGB PNG preview."""
+
+        path = self._prepare_export_path(file_path, export_format)
+
+        with self.bridge.session() as (app, doc):
+            if export_format == "pdf":
+                doc.PublishToPDF(str(path))
+            elif export_format == "png":
+                options = app.CreateStructExportOptions()
+                options.ImageType = CDR_RGB_COLOR_IMAGE
+                options.Overwrite = True
+                options.ResolutionX = dpi
+                options.ResolutionY = dpi
+                export_filter = doc.ExportEx(
+                    str(path), CDR_PNG, CDR_CURRENT_PAGE, options
+                )
+                export_filter.Finish()
+            else:
+                raise CorelDrawBridgeError(
+                    f"Định dạng export không được hỗ trợ: {export_format}"
+                )
+
+        return str(path)
 
     def export_to_pdf(self, file_path: str) -> bool:
-        """Tự động xuất file thiết kế hiện tại ra định dạng PDF in ấn."""
-        if not self.bridge.app or not self.bridge.doc:
-            if not self.bridge.connect():
-                return False
-        try:
-            # CorelDRAW ActiveDocument.ExportEx
-            pdf_options = self.bridge.app.CreateStructExportOptions()
-            pdf_options.FilterID = "PDF"
-            self.bridge.doc.Export(file_path, 8, 0, pdf_options) # 8 = cdrPDF
-            return True
-        except Exception as e:
-            print(f"Error exporting PDF: {e}")
-            return False
+        """Backward-compatible wrapper used by the original project."""
+
+        self.export_document(file_path, "pdf")
+        return True
+
 
 extended_bridge = ExtendedCorelDrawBridge()
 
+
 if __name__ == "__main__":
-    print("Extended CorelDRAW Bridge Loaded Successfully.")
+    print("Extended CorelDRAW Bridge loaded.")
