@@ -1,97 +1,206 @@
-# CorelDRAW AI Plugin Agent
+# CorelDRAW AI Template Plugin
 
-REST API chạy cục bộ trên Windows, cho phép AI Agent điều khiển CorelDRAW qua Win32 COM Automation để tạo vector CMYK, chỉnh outline, group đối tượng và xuất file.
+Local Windows service that lets a CorelDRAW Docker UI or AI Agent automate
+CorelDRAW through Win32 COM. Version 1.3 adds template manifests, structured
+menu rendering and optional AI-image generation adapters.
 
-## Trạng thái MVP
+## What the MVP can do
 
-Đã hỗ trợ:
+- Connect to CorelDRAW and serialize COM operations.
+- Create CMYK rectangles, ellipses and artistic text.
+- Open an existing `.cdr` template and find named shapes.
+- Replace editable text placeholders.
+- Import a local or generated bitmap into a named image slot.
+- Save an editable `.cdr` output.
+- Export PDF for production and PNG for preview.
+- Load JSON template manifests and render menu data in one API call.
+- Expose an HTML UI suitable for adapting into a CorelDRAW Docker panel.
+- Optionally call a TikNow-compatible submit/status image API through an
+  environment-configured adapter. No third-party endpoint or token is embedded.
 
-- Kết nối CorelDRAW 2020-2023 và tự tạo document nếu chưa có file mở.
-- Tạo rectangle, ellipse và artistic text với màu CMYK.
-- Đặt tên shape ổn định để AI dùng lại ở các lệnh sau.
-- Chỉnh outline CMYK và group nhiều shape.
-- Xuất PDF in ấn và PNG preview.
-- Validate request bằng Pydantic, trả lỗi JSON rõ ràng.
-- Test bằng COM mock nên có thể chạy CI trên Linux mà không cần cài CorelDRAW.
-
-## Kiến trúc
+## Architecture
 
 ```text
-AI Agent
-   │ JSON / HTTP
-   ▼
-FastAPI (main.py, 127.0.0.1:8001)
-   │
-   ├── CorelDrawBridge: shape/text/CMYK
-   └── ExtendedCorelDrawBridge: outline/group/export
-   │ Win32 COM Automation
-   ▼
-CorelDRAW trên Windows
+CorelDRAW HTML Docker / AI Agent
+              │ HTTP on 127.0.0.1
+              ▼
+       FastAPI orchestration
+              │
+      ┌───────┼──────────────┐
+      │       │              │
+Template   Image provider   Export manager
+registry   adapter          PDF / PNG / CDR
+      │       │              │
+      └───────┴──────┬───────┘
+                     ▼
+             CorelDRAW COM bridge
+                     ▼
+                  CorelDRAW
 ```
 
-Mỗi lệnh mở một COM session ngắn và được khóa tuần tự để tránh xung đột thread giữa FastAPI và CorelDRAW.
+Python is the only owner of CorelDRAW COM state. The HTML panel sends HTTP
+commands and does not edit the document through `window.external`, preventing
+two controllers from fighting over the same active document.
 
-## Yêu cầu
+## Requirements
 
 - Windows 10/11 64-bit.
-- CorelDRAW 2020, 2021, 2022 hoặc 2023.
-- Python 3.10 trở lên.
+- CorelDRAW 2020-2023 for the currently targeted COM behavior.
+- Python 3.10+ with the same bitness as CorelDRAW.
 
-## Cài đặt
+## Installation
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-Mở CorelDRAW trước, sau đó chạy API:
-
-```powershell
 python main.py
 ```
 
+Open CorelDRAW before rendering a job.
+
 - API: `http://127.0.0.1:8001`
-- Swagger UI: `http://127.0.0.1:8001/docs`
-- Health check: `http://127.0.0.1:8001/health`
+- Swagger: `http://127.0.0.1:8001/docs`
+- Health: `http://127.0.0.1:8001/health`
 
-Server mặc định chỉ bind vào `127.0.0.1`. Không đổi sang `0.0.0.0` nếu chưa bổ sung authentication và firewall.
+The server binds only to localhost. Do not expose it publicly without adding
+authentication and an explicit filesystem security model.
 
-## Endpoint chính
+## Template contract
 
-| Method | Endpoint | Chức năng |
+A designer creates the `.cdr` template and names objects consistently:
+
+```text
+placeholder_title
+placeholder_subtitle
+placeholder_address
+placeholder_phone
+placeholder_item_1_name
+placeholder_item_1_price
+placeholder_item_1_description
+placeholder_item_1_image
+...
+```
+
+A JSON manifest describes those names. See
+[`templates/manifests/menu_a4_demo.json`](templates/manifests/menu_a4_demo.json).
+The sample manifest points to a placeholder CDR path because binary design
+files are not committed. During rendering, either place your template at the
+configured path or pass `template_path_override`.
+
+## Render a menu
+
+```powershell
+curl.exe -X POST `
+  "http://127.0.0.1:8001/api/v1/templates/menu_a4_demo/render-menu" `
+  -H "Content-Type: application/json" `
+  -d '@menu-job.json'
+```
+
+Example `menu-job.json`:
+
+```json
+{
+  "template_path_override": "D:\\Templates\\menu_a4_demo.cdr",
+  "title": "MENU QUÁN NHÀ LONG",
+  "subtitle": "Ngon mỗi ngày",
+  "address": "Cần Thơ",
+  "phone": "0900 000 000",
+  "sections": [
+    {
+      "name": "Món chính",
+      "items": [
+        {
+          "name": "Cơm tấm sườn",
+          "price": "35.000",
+          "description": "Sườn nướng, trứng và đồ chua",
+          "image_path": "D:\\Images\\com-tam.png"
+        },
+        {
+          "name": "Bún bò",
+          "price": "40.000",
+          "image_prompt": "Vietnamese bun bo Hue food photography, clean menu image"
+        }
+      ]
+    }
+  ],
+  "output_dir": "D:\\CorelAI\\output",
+  "file_stem": "menu-quan-nha-long",
+  "generate_missing_images": false,
+  "export_pdf": true,
+  "export_png": true,
+  "preview_dpi": 150
+}
+```
+
+Output:
+
+```text
+output/
+├── menu-quan-nha-long.cdr
+├── menu-quan-nha-long.pdf
+└── menu-quan-nha-long-preview.png
+```
+
+When `generate_missing_images` is false, items with `image_prompt` are returned
+in `pending_image_prompts`. This lets a user approve prompts before spending
+credits. When it is true, a configured image provider generates and inserts the
+image automatically.
+
+## Optional image generation
+
+The adapter follows the public submit/status contract used by TikNow-style
+plugins, but is configured generically:
+
+```powershell
+$env:IMAGE_API_BASE_URL="https://your-provider.example"
+$env:IMAGE_API_TOKEN="..."
+$env:IMAGE_MODEL="your-image-model"
+$env:IMAGE_TIMEOUT_SECONDS="180"
+python main.py
+```
+
+Expected endpoints:
+
+```text
+POST /api/generate/submit
+GET  /api/generate/status/{taskId}
+```
+
+Without these variables, image generation is disabled and existing local image
+paths still work.
+
+## Docker UI
+
+`docker_ui/` contains a lightweight form that calls the local API. Start the
+server and open `docker_ui/index.html` for testing. Registering a true CorelDRAW
+HTML Docker requires an `AppUI.xslt` matching the exact CorelDRAW version; see
+`docker_ui/README.md`.
+
+## Main endpoints
+
+| Method | Endpoint | Purpose |
 |---|---|---|
-| `GET` | `/health` | Kiểm tra HTTP service, không mở CorelDRAW |
-| `POST` | `/api/v1/corel/connect` | Kiểm tra COM và active document |
-| `POST` | `/api/v1/corel/shape/rectangle` | Tạo rectangle CMYK |
-| `POST` | `/api/v1/corel/shape/ellipse` | Tạo ellipse CMYK |
-| `POST` | `/api/v1/corel/text/artistic` | Tạo artistic text CMYK |
-| `POST` | `/api/v1/corel/shape/outline` | Chỉnh outline theo tên shape |
-| `POST` | `/api/v1/corel/shape/group` | Group nhiều shape |
-| `POST` | `/api/v1/corel/export` | Xuất PDF hoặc PNG |
+| `GET` | `/health` | Service and provider status |
+| `POST` | `/api/v1/corel/connect` | Verify CorelDRAW COM |
+| `POST` | `/api/v1/corel/document/open` | Open a CDR template |
+| `POST` | `/api/v1/corel/document/save` | Save editable CDR |
+| `GET` | `/api/v1/corel/shapes` | List named shapes |
+| `POST` | `/api/v1/corel/text/set` | Replace template text |
+| `POST` | `/api/v1/corel/image/place-in-slot` | Fit bitmap to named slot |
+| `POST` | `/api/v1/corel/export` | Export PDF or PNG |
+| `GET` | `/api/v1/templates` | List manifests |
+| `POST` | `/api/v1/templates/{id}/render-menu` | Produce menu outputs |
+| `GET` | `/api/v1/image-provider/status` | Image adapter status |
 
-Danh sách payload đầy đủ nằm trong [COREL_AI_COMMANDS.md](COREL_AI_COMMANDS.md).
-
-## Quy ước tọa độ
-
-- `x`, `y` là góc trái trên.
-- `width`, `height` phải lớn hơn `0`.
-- Đơn vị phụ thuộc vào unit hiện tại của document CorelDRAW.
-- API tính bounding box theo `left=x`, `top=y`, `right=x+width`, `bottom=y-height`.
-
-## Export
-
-- `pdf`: dùng `Document.PublishToPDF`, phù hợp file in.
-- `png`: dùng `Document.ExportEx` ở RGB, phù hợp preview; DPI từ 72 đến 1200.
-- Nếu thiếu extension, server tự thêm `.pdf` hoặc `.png`.
-- Thư mục cha được tạo tự động.
-
-## Chạy test
+## Tests
 
 ```bash
 pip install -r requirements-dev.txt
 pytest -q
 ```
 
-Test không gọi CorelDRAW thật. Khi triển khai trên Windows vẫn cần kiểm tra smoke test với đúng phiên bản CorelDRAW và profile màu của máy in.
+The test suite uses COM mocks and runs without CorelDRAW. A real Windows smoke
+test is still required for each supported CorelDRAW version, especially bitmap
+import positioning and PDF/PNG export profiles.
