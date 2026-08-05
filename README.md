@@ -1,51 +1,206 @@
-# CORELDRAW AI PLUGIN AGENT - INSTRUCTION & ARCHITECTURE
+# CorelDRAW AI Template Plugin
 
-Dự án: **CorelDRAW AI Plugin Agent**
-Vị trí thư mục: `d:\codex\coreldraw-ai-plugin`
+Local Windows service that lets a CorelDRAW Docker UI or AI Agent automate
+CorelDRAW through Win32 COM. Version 1.3 adds template manifests, structured
+menu rendering and optional AI-image generation adapters.
 
----
+## What the MVP can do
 
-## 🎯 MỤC TIÊU DỰ ÁN
+- Connect to CorelDRAW and serialize COM operations.
+- Create CMYK rectangles, ellipses and artistic text.
+- Open an existing `.cdr` template and find named shapes.
+- Replace editable text placeholders.
+- Import a local or generated bitmap into a named image slot.
+- Save an editable `.cdr` output.
+- Export PDF for production and PNG for preview.
+- Load JSON template manifests and render menu data in one API call.
+- Expose an HTML UI suitable for adapting into a CorelDRAW Docker panel.
+- Optionally call a TikNow-compatible submit/status image API through an
+  environment-configured adapter. No third-party endpoint or token is embedded.
 
-Tạo ra giải pháp giao tiếp (Plugin / API Bridge) kết nối giữa **AI Agent (Vision-Action AI)** và phần mềm **CorelDRAW** trên Windows:
-- Cho phép AI gửi câu lệnh JSON qua REST API để tự động tạo đối tượng Vector (Hình chữ nhật, hình tròn, đường cong, Text).
-- Tự động thay đổi màu sắc Fill (RGB/CMYK), cài đặt Font chữ, kích thước, hiệu ứng căn chỉnh (Alignment) trong CorelDRAW giống như thao tác của một Designer chuyên nghiệp.
+## Architecture
 
----
-
-## 🏗️ CẾT CẤU MÃ NGUỒN (ARCHITECTURE)
-
+```text
+CorelDRAW HTML Docker / AI Agent
+              │ HTTP on 127.0.0.1
+              ▼
+       FastAPI orchestration
+              │
+      ┌───────┼──────────────┐
+      │       │              │
+Template   Image provider   Export manager
+registry   adapter          PDF / PNG / CDR
+      │       │              │
+      └───────┴──────┬───────┘
+                     ▼
+             CorelDRAW COM bridge
+                     ▼
+                  CorelDRAW
 ```
-[Vision-Action AI Agent] 
-        │ (Gửi câu lệnh thiết kế JSON qua HTTP)
-        ▼
-[FastAPI Server: main.py (Port 8001)] 
-        │ (Truyền lệnh xuống Win32 COM Interface)
-        ▼
-[CorelDRAW Automation Bridge: corel_bridge.py] 
-        │ (Điều khiển trực tiếp tiến trình CorelDRAW.exe)
-        ▼
-[CorelDRAW Application Canvas] (Tự động vẽ Vector / Chèn Text)
-```
 
----
+Python is the only owner of CorelDRAW COM state. The HTML panel sends HTTP
+commands and does not edit the document through `window.external`, preventing
+two controllers from fighting over the same active document.
 
-## 📁 CÁC FILE CHÍNH
+## Requirements
 
-1. [`corel_bridge.py`](file:///d:/codex/coreldraw-ai-plugin/corel_bridge.py): Module tương tác Win32 COM Automation trực tiếp với `CorelDRAW.Application`.
-2. [`main.py`](file:///d:/codex/coreldraw-ai-plugin/main.py): REST API Server (FastAPI) nhận yêu cầu thiết kế từ AI Agent.
-3. [`requirements.txt`](file:///d:/codex/coreldraw-ai-plugin/requirements.txt): Cài đặt `pywin32`, `fastapi`, `uvicorn`.
+- Windows 10/11 64-bit.
+- CorelDRAW 2020-2023 for the currently targeted COM behavior.
+- Python 3.10+ with the same bitness as CorelDRAW.
 
----
+## Installation
 
-## 🚀 HƯỚNG DẪN KHỞI CHẠY LẦN ĐẦU
-
-```bash
-# 1. Cài đặt các gói phụ thuộc
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-
-# 2. Khởi chạy CorelDRAW trên máy Windows
-# 3. Chạy REST API Bridge cho AI Agent
 python main.py
 ```
-Sau đó AI Agent chỉ cần gửi HTTP POST tới `http://127.0.0.1:8001/api/v1/corel/rectangle` hoặc `/text` để CorelDRAW tự động thiết kế!
+
+Open CorelDRAW before rendering a job.
+
+- API: `http://127.0.0.1:8001`
+- Swagger: `http://127.0.0.1:8001/docs`
+- Health: `http://127.0.0.1:8001/health`
+
+The server binds only to localhost. Do not expose it publicly without adding
+authentication and an explicit filesystem security model.
+
+## Template contract
+
+A designer creates the `.cdr` template and names objects consistently:
+
+```text
+placeholder_title
+placeholder_subtitle
+placeholder_address
+placeholder_phone
+placeholder_item_1_name
+placeholder_item_1_price
+placeholder_item_1_description
+placeholder_item_1_image
+...
+```
+
+A JSON manifest describes those names. See
+[`templates/manifests/menu_a4_demo.json`](templates/manifests/menu_a4_demo.json).
+The sample manifest points to a placeholder CDR path because binary design
+files are not committed. During rendering, either place your template at the
+configured path or pass `template_path_override`.
+
+## Render a menu
+
+```powershell
+curl.exe -X POST `
+  "http://127.0.0.1:8001/api/v1/templates/menu_a4_demo/render-menu" `
+  -H "Content-Type: application/json" `
+  -d '@menu-job.json'
+```
+
+Example `menu-job.json`:
+
+```json
+{
+  "template_path_override": "D:\\Templates\\menu_a4_demo.cdr",
+  "title": "MENU QUÁN NHÀ LONG",
+  "subtitle": "Ngon mỗi ngày",
+  "address": "Cần Thơ",
+  "phone": "0900 000 000",
+  "sections": [
+    {
+      "name": "Món chính",
+      "items": [
+        {
+          "name": "Cơm tấm sườn",
+          "price": "35.000",
+          "description": "Sườn nướng, trứng và đồ chua",
+          "image_path": "D:\\Images\\com-tam.png"
+        },
+        {
+          "name": "Bún bò",
+          "price": "40.000",
+          "image_prompt": "Vietnamese bun bo Hue food photography, clean menu image"
+        }
+      ]
+    }
+  ],
+  "output_dir": "D:\\CorelAI\\output",
+  "file_stem": "menu-quan-nha-long",
+  "generate_missing_images": false,
+  "export_pdf": true,
+  "export_png": true,
+  "preview_dpi": 150
+}
+```
+
+Output:
+
+```text
+output/
+├── menu-quan-nha-long.cdr
+├── menu-quan-nha-long.pdf
+└── menu-quan-nha-long-preview.png
+```
+
+When `generate_missing_images` is false, items with `image_prompt` are returned
+in `pending_image_prompts`. This lets a user approve prompts before spending
+credits. When it is true, a configured image provider generates and inserts the
+image automatically.
+
+## Optional image generation
+
+The adapter follows the public submit/status contract used by TikNow-style
+plugins, but is configured generically:
+
+```powershell
+$env:IMAGE_API_BASE_URL="https://your-provider.example"
+$env:IMAGE_API_TOKEN="..."
+$env:IMAGE_MODEL="your-image-model"
+$env:IMAGE_TIMEOUT_SECONDS="180"
+python main.py
+```
+
+Expected endpoints:
+
+```text
+POST /api/generate/submit
+GET  /api/generate/status/{taskId}
+```
+
+Without these variables, image generation is disabled and existing local image
+paths still work.
+
+## Docker UI
+
+`docker_ui/` contains a lightweight form that calls the local API. Start the
+server and open `docker_ui/index.html` for testing. Registering a true CorelDRAW
+HTML Docker requires an `AppUI.xslt` matching the exact CorelDRAW version; see
+`docker_ui/README.md`.
+
+## Main endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/health` | Service and provider status |
+| `POST` | `/api/v1/corel/connect` | Verify CorelDRAW COM |
+| `POST` | `/api/v1/corel/document/open` | Open a CDR template |
+| `POST` | `/api/v1/corel/document/save` | Save editable CDR |
+| `GET` | `/api/v1/corel/shapes` | List named shapes |
+| `POST` | `/api/v1/corel/text/set` | Replace template text |
+| `POST` | `/api/v1/corel/image/place-in-slot` | Fit bitmap to named slot |
+| `POST` | `/api/v1/corel/export` | Export PDF or PNG |
+| `GET` | `/api/v1/templates` | List manifests |
+| `POST` | `/api/v1/templates/{id}/render-menu` | Produce menu outputs |
+| `GET` | `/api/v1/image-provider/status` | Image adapter status |
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+The test suite uses COM mocks and runs without CorelDRAW. A real Windows smoke
+test is still required for each supported CorelDRAW version, especially bitmap
+import positioning and PDF/PNG export profiles.

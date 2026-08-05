@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "template_id": "menu_a4_demo",
+  "name": "Menu A4 Demo",
+  "category": "menu",
+  "description": "Naming contract for an A4 food menu with eight item rows and optional image slots.",
+  "cdr_path": "../cdr/menu_a4_demo.cdr",
+  "page_size": "A4 portrait",
+  "placeholders": [
+    {
+      "key": "title",
+      "shape_name": "placeholder_title",
+      "kind": "text",
+      "required": true,
+      "max_length": 80,
+      "min_font_size": 20,
+      "max_width": 180
+    },
+    {
+      "key": "subtitle",
+      "shape_name": "placeholder_subtitle",
+      "kind": "text",
+      "required": false,
+      "max_length": 160,
+      "min_font_size": 10,
+      "max_width": 180
+    },
+    {
+      "key": "address",
+      "shape_name": "placeholder_address",
+      "kind": "text",
+      "required": false,
+      "max_length": 200,
+      "min_font_size": 8,
+      "max_width": 180
+    },
+    {
+      "key": "phone",
+      "shape_name": "placeholder_phone",
+      "kind": "text",
+      "required": false,
+      "max_length": 50,
+      "min_font_size": 8,
+      "max_width": 90
+    }
+  ],
+  "repeaters": [
+    {
+      "source": "items",
+      "start_index": 1,
+      "max_items": 8,
+      "clear_unused": true,
+      "fields": {
+        "section": "placeholder_item_{index}_section",
+        "name": "placeholder_item_{index}_name",
+        "price": "placeholder_item_{index}_price",
+        "description": "placeholder_item_{index}_description",
+        "image": "placeholder_item_{index}_image"
+      }
+    }
+  ]
+}
