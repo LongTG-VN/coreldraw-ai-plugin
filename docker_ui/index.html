@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CorelDRAW AI Template</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>CorelDRAW AI Template</h1>
+        <p>Chọn template, nhập dữ liệu menu, tạo CDR/PDF/PNG.</p>
+      </div>
+      <span id="serverStatus" class="status">Đang kiểm tra…</span>
+    </header>
+
+    <section class="card">
+      <label>Template
+        <select id="templateSelect"></select>
+      </label>
+      <label>Đường dẫn file CDR template
+        <input id="templatePath" placeholder="D:\Templates\menu_a4_demo.cdr" />
+      </label>
+      <div class="grid two">
+        <label>Tên quán<input id="title" value="MENU QUÁN NHÀ LONG" /></label>
+        <label>Khẩu hiệu<input id="subtitle" value="Ngon mỗi ngày" /></label>
+        <label>Địa chỉ<input id="address" value="Cần Thơ" /></label>
+        <label>Điện thoại<input id="phone" value="0900 000 000" /></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-title">
+        <h2>Món ăn</h2>
+        <button id="addItem" type="button">+ Thêm món</button>
+      </div>
+      <div id="items"></div>
+    </section>
+
+    <section class="card">
+      <div class="grid two">
+        <label>Thư mục output
+          <input id="outputDir" value="D:\CorelAI\output" />
+        </label>
+        <label>Tên file
+          <input id="fileStem" value="menu-quan-nha-long" />
+        </label>
+      </div>
+      <label class="check">
+        <input id="generateImages" type="checkbox" />
+        Sinh ảnh cho món có prompt (cần cấu hình image provider)
+      </label>
+      <button id="render" class="primary" type="button">Tạo thành phẩm</button>
+      <pre id="result">Chưa chạy.</pre>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
