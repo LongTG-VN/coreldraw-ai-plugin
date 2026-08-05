@@ -1,51 +1,97 @@
-# CORELDRAW AI PLUGIN AGENT - INSTRUCTION & ARCHITECTURE
+# CorelDRAW AI Plugin Agent
 
-Dự án: **CorelDRAW AI Plugin Agent**
-Vị trí thư mục: `d:\codex\coreldraw-ai-plugin`
+REST API chạy cục bộ trên Windows, cho phép AI Agent điều khiển CorelDRAW qua Win32 COM Automation để tạo vector CMYK, chỉnh outline, group đối tượng và xuất file.
 
----
+## Trạng thái MVP
 
-## 🎯 MỤC TIÊU DỰ ÁN
+Đã hỗ trợ:
 
-Tạo ra giải pháp giao tiếp (Plugin / API Bridge) kết nối giữa **AI Agent (Vision-Action AI)** và phần mềm **CorelDRAW** trên Windows:
-- Cho phép AI gửi câu lệnh JSON qua REST API để tự động tạo đối tượng Vector (Hình chữ nhật, hình tròn, đường cong, Text).
-- Tự động thay đổi màu sắc Fill (RGB/CMYK), cài đặt Font chữ, kích thước, hiệu ứng căn chỉnh (Alignment) trong CorelDRAW giống như thao tác của một Designer chuyên nghiệp.
+- Kết nối CorelDRAW 2020-2023 và tự tạo document nếu chưa có file mở.
+- Tạo rectangle, ellipse và artistic text với màu CMYK.
+- Đặt tên shape ổn định để AI dùng lại ở các lệnh sau.
+- Chỉnh outline CMYK và group nhiều shape.
+- Xuất PDF in ấn và PNG preview.
+- Validate request bằng Pydantic, trả lỗi JSON rõ ràng.
+- Test bằng COM mock nên có thể chạy CI trên Linux mà không cần cài CorelDRAW.
 
----
+## Kiến trúc
 
-## 🏗️ CẾT CẤU MÃ NGUỒN (ARCHITECTURE)
-
+```text
+AI Agent
+   │ JSON / HTTP
+   ▼
+FastAPI (main.py, 127.0.0.1:8001)
+   │
+   ├── CorelDrawBridge: shape/text/CMYK
+   └── ExtendedCorelDrawBridge: outline/group/export
+   │ Win32 COM Automation
+   ▼
+CorelDRAW trên Windows
 ```
-[Vision-Action AI Agent] 
-        │ (Gửi câu lệnh thiết kế JSON qua HTTP)
-        ▼
-[FastAPI Server: main.py (Port 8001)] 
-        │ (Truyền lệnh xuống Win32 COM Interface)
-        ▼
-[CorelDRAW Automation Bridge: corel_bridge.py] 
-        │ (Điều khiển trực tiếp tiến trình CorelDRAW.exe)
-        ▼
-[CorelDRAW Application Canvas] (Tự động vẽ Vector / Chèn Text)
-```
 
----
+Mỗi lệnh mở một COM session ngắn và được khóa tuần tự để tránh xung đột thread giữa FastAPI và CorelDRAW.
 
-## 📁 CÁC FILE CHÍNH
+## Yêu cầu
 
-1. [`corel_bridge.py`](file:///d:/codex/coreldraw-ai-plugin/corel_bridge.py): Module tương tác Win32 COM Automation trực tiếp với `CorelDRAW.Application`.
-2. [`main.py`](file:///d:/codex/coreldraw-ai-plugin/main.py): REST API Server (FastAPI) nhận yêu cầu thiết kế từ AI Agent.
-3. [`requirements.txt`](file:///d:/codex/coreldraw-ai-plugin/requirements.txt): Cài đặt `pywin32`, `fastapi`, `uvicorn`.
+- Windows 10/11 64-bit.
+- CorelDRAW 2020, 2021, 2022 hoặc 2023.
+- Python 3.10 trở lên.
 
----
+## Cài đặt
 
-## 🚀 HƯỚNG DẪN KHỞI CHẠY LẦN ĐẦU
-
-```bash
-# 1. Cài đặt các gói phụ thuộc
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
+```
 
-# 2. Khởi chạy CorelDRAW trên máy Windows
-# 3. Chạy REST API Bridge cho AI Agent
+Mở CorelDRAW trước, sau đó chạy API:
+
+```powershell
 python main.py
 ```
-Sau đó AI Agent chỉ cần gửi HTTP POST tới `http://127.0.0.1:8001/api/v1/corel/rectangle` hoặc `/text` để CorelDRAW tự động thiết kế!
+
+- API: `http://127.0.0.1:8001`
+- Swagger UI: `http://127.0.0.1:8001/docs`
+- Health check: `http://127.0.0.1:8001/health`
+
+Server mặc định chỉ bind vào `127.0.0.1`. Không đổi sang `0.0.0.0` nếu chưa bổ sung authentication và firewall.
+
+## Endpoint chính
+
+| Method | Endpoint | Chức năng |
+|---|---|---|
+| `GET` | `/health` | Kiểm tra HTTP service, không mở CorelDRAW |
+| `POST` | `/api/v1/corel/connect` | Kiểm tra COM và active document |
+| `POST` | `/api/v1/corel/shape/rectangle` | Tạo rectangle CMYK |
+| `POST` | `/api/v1/corel/shape/ellipse` | Tạo ellipse CMYK |
+| `POST` | `/api/v1/corel/text/artistic` | Tạo artistic text CMYK |
+| `POST` | `/api/v1/corel/shape/outline` | Chỉnh outline theo tên shape |
+| `POST` | `/api/v1/corel/shape/group` | Group nhiều shape |
+| `POST` | `/api/v1/corel/export` | Xuất PDF hoặc PNG |
+
+Danh sách payload đầy đủ nằm trong [COREL_AI_COMMANDS.md](COREL_AI_COMMANDS.md).
+
+## Quy ước tọa độ
+
+- `x`, `y` là góc trái trên.
+- `width`, `height` phải lớn hơn `0`.
+- Đơn vị phụ thuộc vào unit hiện tại của document CorelDRAW.
+- API tính bounding box theo `left=x`, `top=y`, `right=x+width`, `bottom=y-height`.
+
+## Export
+
+- `pdf`: dùng `Document.PublishToPDF`, phù hợp file in.
+- `png`: dùng `Document.ExportEx` ở RGB, phù hợp preview; DPI từ 72 đến 1200.
+- Nếu thiếu extension, server tự thêm `.pdf` hoặc `.png`.
+- Thư mục cha được tạo tự động.
+
+## Chạy test
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+Test không gọi CorelDRAW thật. Khi triển khai trên Windows vẫn cần kiểm tra smoke test với đúng phiên bản CorelDRAW và profile màu của máy in.
