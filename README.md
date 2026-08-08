@@ -1,8 +1,9 @@
 # CorelDRAW AI Template Plugin
 
 Local Windows service that lets a CorelDRAW Docker UI or AI Agent automate
-CorelDRAW through Win32 COM. Version 1.3 adds template manifests, structured
-menu rendering and optional AI-image generation adapters.
+CorelDRAW through Win32 COM. The current agent API adds canvas inspection,
+layout composition, typography, z-order, asset fitting/PowerClip and iterative
+preview/check/undo controls on top of the existing template workflow.
 
 ## What the MVP can do
 
@@ -17,6 +18,9 @@ menu rendering and optional AI-image generation adapters.
 - Expose an HTML UI suitable for adapting into a CorelDRAW Docker panel.
 - Optionally call a TikNow-compatible submit/status image API through an
   environment-configured adapter. No third-party endpoint or token is embedded.
+- Expose agent-facing design controls for snapshot, transform, batch transform,
+  typography, z-order, alignment, distribution, page resize, aspect fitting,
+  PowerClip, preview, deterministic checks and undo.
 
 ## Architecture
 
@@ -28,8 +32,8 @@ CorelDRAW HTML Docker / AI Agent
               │
       ┌───────┼──────────────┐
       │       │              │
-Template   Image provider   Export manager
-registry   adapter          PDF / PNG / CDR
+Template   Image provider   Agent design API
+registry   adapter          layout / preview / undo
       │       │              │
       └───────┴──────┬───────┘
                      ▼
@@ -38,9 +42,9 @@ registry   adapter          PDF / PNG / CDR
                   CorelDRAW
 ```
 
-Python is the only owner of CorelDRAW COM state. The HTML panel sends HTTP
-commands and does not edit the document through `window.external`, preventing
-two controllers from fighting over the same active document.
+Python is the only owner of CorelDRAW COM state. The HTML panel and AI agents
+send HTTP commands and do not edit the document through `window.external`,
+preventing two controllers from fighting over the same active document.
 
 ## Requirements
 
@@ -66,6 +70,26 @@ Open CorelDRAW before rendering a job.
 
 The server binds only to localhost. Do not expose it publicly without adding
 authentication and an explicit filesystem security model.
+
+## Antigravity / autonomous design
+
+The recommended agent loop is:
+
+```text
+snapshot
+  -> create/import assets
+  -> batch transform
+  -> typography + align/distribute + z-order
+  -> aspect-fit/PowerClip images
+  -> render PNG preview
+  -> visual critique
+  -> deterministic check
+  -> refine or undo
+  -> save CDR + export PDF
+```
+
+See `docs/ANTIGRAVITY_DESIGN_API.md` and
+`docs/ANTIGRAVITY_V15_LAYOUT_API.md` for endpoint details and examples.
 
 ## Template contract
 
@@ -190,6 +214,17 @@ HTML Docker requires an `AppUI.xslt` matching the exact CorelDRAW version; see
 | `POST` | `/api/v1/corel/text/set` | Replace template text |
 | `POST` | `/api/v1/corel/image/place-in-slot` | Fit bitmap to named slot |
 | `POST` | `/api/v1/corel/export` | Export PDF or PNG |
+| `GET` | `/api/v1/design/snapshot` | Inspect active page and objects |
+| `POST` | `/api/v1/design/objects/batch-transform` | Batch layout transforms |
+| `POST` | `/api/v1/design/object/typography` | Edit text/font/size |
+| `POST` | `/api/v1/design/object/order` | Change stacking order |
+| `POST` | `/api/v1/design/objects/align` | Align selected objects |
+| `POST` | `/api/v1/design/objects/distribute` | Distribute selected objects |
+| `POST` | `/api/v1/design/page/resize` | Resize active page |
+| `POST` | `/api/v1/design/object/fit-to-frame` | Aspect fit/cover + optional PowerClip |
+| `POST` | `/api/v1/design/render-preview` | Export agent preview |
+| `POST` | `/api/v1/design/check` | Run deterministic guardrails |
+| `POST` | `/api/v1/design/undo` | Undo mutations |
 | `GET` | `/api/v1/templates` | List manifests |
 | `POST` | `/api/v1/templates/{id}/render-menu` | Produce menu outputs |
 | `GET` | `/api/v1/image-provider/status` | Image adapter status |
@@ -203,4 +238,5 @@ pytest -q
 
 The test suite uses COM mocks and runs without CorelDRAW. A real Windows smoke
 test is still required for each supported CorelDRAW version, especially bitmap
-import positioning and PDF/PNG export profiles.
+import positioning, PowerClip behavior, stacking order, page sizing and PDF/PNG
+export profiles.
