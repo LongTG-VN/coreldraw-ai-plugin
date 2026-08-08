@@ -1,4 +1,4 @@
-"""FastAPI server exposing CorelDRAW CMYK and template automation commands."""
+"""FastAPI server exposing CorelDRAW template and autonomous-agent commands."""
 
 from __future__ import annotations
 
@@ -12,17 +12,18 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from corel_bridge import CorelDrawBridgeError, corel_bridge
+from design_bridge import DesignBridge
 from extended_bridge import extended_bridge
 from template_engine import TemplateEngine, TemplateRegistry, TemplateRegistryError
 from template_models import MenuRenderRequest
 
 app = FastAPI(
-    title="CorelDRAW AI Template Plugin Server",
+    title="CorelDRAW AI Agent Plugin Server",
     description=(
         "Local REST API cho phép Docker UI hoặc AI Agent điều khiển CorelDRAW, "
-        "fill template, chèn ảnh và xuất file sản xuất."
+        "inspect canvas, edit objects, fill template, chèn asset và xuất file sản xuất."
     ),
-    version="1.3.0",
+    version="1.4.0",
 )
 
 app.add_middleware(
@@ -124,6 +125,58 @@ class ImportImageSlotRequest(BaseModel):
     slot_shape_name: str = Field(min_length=1, max_length=120)
     imported_shape_name: Optional[str] = Field(default=None, max_length=120)
     delete_slot: bool = False
+
+
+class TransformShapeRequest(BaseModel):
+    shape_name: str = Field(min_length=1, max_length=120)
+    x: Optional[float] = None
+    y: Optional[float] = None
+    width: Optional[float] = Field(default=None, gt=0)
+    height: Optional[float] = Field(default=None, gt=0)
+    rotation: Optional[float] = Field(default=None, ge=-360_000, le=360_000)
+
+
+class DuplicateShapeRequest(BaseModel):
+    shape_name: str = Field(min_length=1, max_length=120)
+    offset_x: float = 0
+    offset_y: float = 0
+    new_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+class FillShapeRequest(BaseModel):
+    shape_name: str = Field(min_length=1, max_length=120)
+    color: CMYKColor
+
+
+class DeleteShapeRequest(BaseModel):
+    shape_name: str = Field(min_length=1, max_length=120)
+
+
+class ImportAssetRequest(BaseModel):
+    file_path: str = Field(min_length=1, max_length=4_096)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    x: Optional[float] = None
+    y: Optional[float] = None
+    width: Optional[float] = Field(default=None, gt=0)
+    height: Optional[float] = Field(default=None, gt=0)
+
+
+class PreviewRequest(BaseModel):
+    file_path: str = Field(
+        default="storage/previews/agent-preview.png",
+        min_length=1,
+        max_length=4_096,
+    )
+    dpi: int = Field(default=150, ge=72, le=600)
+
+
+class DesignCheckRequest(BaseModel):
+    min_font_size: float = Field(default=6.0, gt=0, le=500)
+    require_named_objects: bool = False
+
+
+class UndoRequest(BaseModel):
+    steps: int = Field(default=1, ge=1, le=50)
 
 
 @app.exception_handler(CorelDrawBridgeError)
@@ -278,6 +331,98 @@ def export_document(req: ExportRequest) -> dict[str, str]:
         "format": req.format,
         "file_path": exported_path,
     }
+
+
+# Agent-facing design API ----------------------------------------------------
+
+@app.get("/api/v1/design/snapshot")
+def design_snapshot() -> dict[str, object]:
+    return {"status": "success", **DesignBridge(corel_bridge).snapshot()}
+
+
+@app.get("/api/v1/design/objects")
+def design_objects() -> dict[str, object]:
+    snapshot = DesignBridge(corel_bridge).snapshot()
+    return {
+        "status": "success",
+        "count": snapshot["object_count"],
+        "objects": snapshot["objects"],
+    }
+
+
+@app.post("/api/v1/design/object/transform")
+def design_transform(req: TransformShapeRequest) -> dict[str, object]:
+    result = DesignBridge(corel_bridge).transform_shape(
+        req.shape_name,
+        x=req.x,
+        y=req.y,
+        width=req.width,
+        height=req.height,
+        rotation=req.rotation,
+    )
+    return {"status": "success", "object": result}
+
+
+@app.post("/api/v1/design/object/duplicate")
+def design_duplicate(req: DuplicateShapeRequest) -> dict[str, object]:
+    result = DesignBridge(corel_bridge).duplicate_shape(
+        req.shape_name,
+        offset_x=req.offset_x,
+        offset_y=req.offset_y,
+        new_name=req.new_name,
+    )
+    return {"status": "success", "object": result}
+
+
+@app.post("/api/v1/design/object/fill")
+def design_fill(req: FillShapeRequest) -> dict[str, object]:
+    result = DesignBridge(corel_bridge).set_fill_cmyk(
+        req.shape_name, *req.color.as_tuple()
+    )
+    return {"status": "success", "object": result}
+
+
+@app.post("/api/v1/design/object/delete")
+def design_delete(req: DeleteShapeRequest) -> dict[str, object]:
+    result = DesignBridge(corel_bridge).delete_shape(req.shape_name)
+    return {"status": "success", **result}
+
+
+@app.post("/api/v1/design/asset/import")
+def design_import_asset(req: ImportAssetRequest) -> dict[str, object]:
+    result = DesignBridge(corel_bridge).import_asset(
+        req.file_path,
+        name=req.name,
+        x=req.x,
+        y=req.y,
+        width=req.width,
+        height=req.height,
+    )
+    return {"status": "success", "object": result}
+
+
+@app.post("/api/v1/design/render-preview")
+def design_render_preview(req: PreviewRequest) -> dict[str, object]:
+    path = extended_bridge.export_document(req.file_path, "png", req.dpi)
+    return {
+        "status": "success",
+        "format": "png",
+        "file_path": path,
+        "dpi": req.dpi,
+    }
+
+
+@app.post("/api/v1/design/check")
+def design_check(req: DesignCheckRequest) -> dict[str, object]:
+    return DesignBridge(corel_bridge).check_design(
+        min_font_size=req.min_font_size,
+        require_named_objects=req.require_named_objects,
+    )
+
+
+@app.post("/api/v1/design/undo")
+def design_undo(req: UndoRequest) -> dict[str, object]:
+    return {"status": "success", **DesignBridge(corel_bridge).undo(req.steps)}
 
 
 @app.get("/api/v1/templates")
