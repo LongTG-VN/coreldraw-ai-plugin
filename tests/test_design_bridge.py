@@ -18,6 +18,11 @@ class FakeFill:
         self.color = color
 
 
+class FakePowerClip:
+    def __init__(self) -> None:
+        self.ContentsLocked = False
+
+
 class FakeShape:
     def __init__(
         self,
@@ -39,7 +44,10 @@ class FakeShape:
         self.Type = 1
         self.Layer = SimpleNamespace(Name="Layer 1")
         self.Shapes = SimpleNamespace(Count=0)
+        self.PowerClip = FakePowerClip()
         self.deleted = False
+        self.order_action: tuple[str, str | None] | None = None
+        self.powerclip_target: str | None = None
         if text is not None:
             self.Text = SimpleNamespace(
                 Story=SimpleNamespace(Text=text, Size=5, Font="Arial")
@@ -61,6 +69,21 @@ class FakeShape:
             width=self.SizeWidth,
             height=self.SizeHeight,
         )
+
+    def OrderToFront(self) -> None:
+        self.order_action = ("front", None)
+
+    def OrderToBack(self) -> None:
+        self.order_action = ("back", None)
+
+    def OrderFrontOf(self, other) -> None:
+        self.order_action = ("front_of", other.Name)
+
+    def OrderBackOf(self, other) -> None:
+        self.order_action = ("back_of", other.Name)
+
+    def AddToPowerClip(self, frame) -> None:
+        self.powerclip_target = frame.Name
 
     def Delete(self) -> None:
         self.deleted = True
@@ -95,18 +118,25 @@ class FakeLayer:
         return self.imported
 
 
+class FakePage:
+    def __init__(self, layer: FakeLayer) -> None:
+        self.Name = "Page 1"
+        self.SizeWidth = 100
+        self.SizeHeight = 50
+        self.Shapes = layer.Shapes
+        self.ActiveLayer = layer
+
+    def SetSize(self, width: float, height: float) -> None:
+        self.SizeWidth = width
+        self.SizeHeight = height
+
+
 class FakeDocument:
     def __init__(self, layer: FakeLayer) -> None:
         self.Name = "Test.cdr"
         self.Unit = 4
         self.undo_count = 0
-        self.ActivePage = SimpleNamespace(
-            Name="Page 1",
-            SizeWidth=100,
-            SizeHeight=50,
-            Shapes=layer.Shapes,
-            ActiveLayer=layer,
-        )
+        self.ActivePage = FakePage(layer)
 
     def Undo(self) -> None:
         self.undo_count += 1
@@ -214,3 +244,90 @@ def test_import_delete_undo_and_allowlist(tmp_path: Path) -> None:
     bad.write_bytes(b"x")
     with pytest.raises(CorelDrawBridgeError, match="allow-list"):
         design.import_asset(str(bad))
+
+
+def test_batch_typography_order_and_page_resize() -> None:
+    bridge = FakeBridge()
+    bridge.items.append(FakeShape("logo", x=60, y=10, width=10, height=10))
+    design = DesignBridge(bridge)
+
+    changed = design.batch_transform(
+        [
+            {"shape_name": "title", "x": 5, "y": 6, "rotation": 8},
+            {"shape_name": "logo", "width": 15, "height": 12},
+        ]
+    )
+    assert changed[0]["x"] == 5
+    assert changed[0]["rotation"] == 8
+    assert changed[1]["width"] == 15
+
+    text = design.set_typography(
+        "title", text="NEW TITLE", font_name="Inter", font_size=18
+    )
+    assert text["text"] == "NEW TITLE"
+    assert text["font_name"] == "Inter"
+    assert text["font_size"] == 18
+
+    design.order_shape("title", "front_of", relative_to="logo")
+    assert bridge.shapes.Item("title").order_action == ("front_of", "logo")
+    design.order_shape("logo", "back")
+    assert bridge.shapes.Item("logo").order_action == ("back", None)
+
+    page = design.set_page_size(210, 297)
+    assert page == {"width": 210.0, "height": 297.0}
+
+
+def test_align_and_distribute_geometry() -> None:
+    bridge = FakeBridge()
+    bridge.items.clear()
+    bridge.items.extend(
+        [
+            FakeShape("a", x=0, y=0, width=10, height=10),
+            FakeShape("b", x=30, y=20, width=10, height=10),
+            FakeShape("c", x=80, y=40, width=20, height=10),
+        ]
+    )
+    design = DesignBridge(bridge)
+
+    aligned = design.align_shapes(
+        ["a", "b", "c"], horizontal="center", relative_to="page"
+    )
+    assert [item["x"] for item in aligned] == [45, 45, 40]
+
+    # Reset X positions and distribute the three shapes across the original span.
+    bridge.shapes.Item("a").SetPosition(0, 0)
+    bridge.shapes.Item("b").SetPosition(30, 20)
+    bridge.shapes.Item("c").SetPosition(80, 40)
+    distributed = design.distribute_shapes(
+        ["a", "b", "c"], axis="horizontal", mode="gaps"
+    )
+    assert distributed[0]["x"] == 0
+    assert distributed[1]["x"] == 40
+    assert distributed[2]["x"] == 80
+
+
+def test_fit_to_frame_cover_and_powerclip() -> None:
+    bridge = FakeBridge()
+    bridge.items.clear()
+    bridge.items.extend(
+        [
+            FakeShape("photo", x=0, y=0, width=200, height=100),
+            FakeShape("frame", x=10, y=5, width=50, height=50),
+        ]
+    )
+    design = DesignBridge(bridge)
+
+    result = design.fit_shape_to_frame(
+        "photo", "frame", mode="cover", powerclip=True, lock_contents=True
+    )
+    photo = bridge.shapes.Item("photo")
+    frame = bridge.shapes.Item("frame")
+
+    assert result["mode"] == "cover"
+    assert result["powerclip"] is True
+    assert photo.SizeWidth == 100
+    assert photo.SizeHeight == 50
+    assert photo.LeftX == -15
+    assert photo.BottomY == 5
+    assert photo.powerclip_target == "frame"
+    assert frame.PowerClip.ContentsLocked is True
