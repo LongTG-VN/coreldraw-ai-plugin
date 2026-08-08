@@ -1,92 +1,54 @@
-# Antigravity Design API
+# CorelDRAW Antigravity Design API
 
-Version 1.4 adds an agent-facing API for iterative CorelDRAW design work. The
-intended loop is:
+The agent-facing API lets Antigravity inspect and iteratively edit an active CorelDRAW document through the local FastAPI service. Python remains the single owner of CorelDRAW COM state.
 
 ```text
-inspect canvas -> edit objects -> render preview -> critique/check -> refine -> save
+inspect -> compose -> preview -> critique -> check -> refine -> save
 ```
 
-The service still binds to `127.0.0.1`; Python remains the single owner of
-CorelDRAW COM state.
-
-## Agent endpoints
+## Core agent endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/design/snapshot` | Read page metadata and recursive object snapshots |
-| `GET` | `/api/v1/design/objects` | Read current objects only |
-| `POST` | `/api/v1/design/object/transform` | Move, resize, or rotate a named object |
-| `POST` | `/api/v1/design/object/duplicate` | Duplicate and offset a named object |
-| `POST` | `/api/v1/design/object/fill` | Apply a uniform CMYK fill |
-| `POST` | `/api/v1/design/object/delete` | Delete a named object |
-| `POST` | `/api/v1/design/asset/import` | Import an SVG/vector/bitmap asset |
-| `POST` | `/api/v1/design/render-preview` | Export the active page to PNG |
-| `POST` | `/api/v1/design/check` | Run deterministic layout/print guardrails |
-| `POST` | `/api/v1/design/undo` | Undo one or more CorelDRAW operations |
+| GET | `/api/v1/design/snapshot` | Read page metadata and recursive object snapshots |
+| GET | `/api/v1/design/objects` | Read current objects |
+| POST | `/api/v1/design/object/transform` | Move, resize or rotate one object |
+| POST | `/api/v1/design/objects/batch-transform` | Transform many objects in one serialized COM session |
+| POST | `/api/v1/design/object/duplicate` | Duplicate an object |
+| POST | `/api/v1/design/object/fill` | Apply uniform CMYK fill |
+| POST | `/api/v1/design/object/typography` | Update text, font and font size |
+| POST | `/api/v1/design/object/order` | Front/back/relative stacking order |
+| POST | `/api/v1/design/objects/align` | Align objects to selection or page |
+| POST | `/api/v1/design/objects/distribute` | Distribute objects by gaps or centers |
+| POST | `/api/v1/design/page/resize` | Resize the active page |
+| POST | `/api/v1/design/asset/import` | Import SVG/vector/bitmap assets |
+| POST | `/api/v1/design/object/fit-to-frame` | Aspect contain/cover into a frame, optionally PowerClip |
+| POST | `/api/v1/design/object/delete` | Delete an object |
+| POST | `/api/v1/design/render-preview` | Export current page to PNG for visual critique |
+| POST | `/api/v1/design/check` | Run deterministic guardrails |
+| POST | `/api/v1/design/undo` | Undo recent CorelDRAW operations |
 
-Existing primitive endpoints for rectangles, ellipses, artistic text, outline,
-grouping, saving, PDF export and template rendering remain available.
+Existing primitive endpoints for rectangles, ellipses, artistic text, outline, grouping, saving, PDF export and template rendering remain available.
 
-## Example autonomous loop
+See `ANTIGRAVITY_V15_LAYOUT_API.md` for request examples.
 
-1. `GET /api/v1/design/snapshot`
-2. Create or import the required artwork.
-3. Use `/object/transform` and `/object/fill` to refine composition.
-4. `POST /api/v1/design/render-preview`.
-5. Let the visual agent inspect the PNG.
-6. `POST /api/v1/design/check` for deterministic guardrails.
-7. Refine again or call `/api/v1/design/undo` when a mutation is bad.
-8. Save the editable CDR and export the final PDF.
+## Recommended loop
 
-## Transform example
+1. Call `/snapshot`.
+2. Create primitive Corel shapes or import SVG/images.
+3. Use batch transforms instead of many tiny HTTP calls.
+4. Apply typography, alignment, distribution and z-order.
+5. Use `fit-to-frame` with `cover + powerclip` for hero/product images.
+6. Render a PNG preview.
+7. Let the vision agent critique the preview.
+8. Apply corrections and call `/design/check`.
+9. Undo bad mutations when necessary.
+10. Save editable CDR and export PDF when accepted.
 
-```json
-{
-  "shape_name": "headline",
-  "x": 20,
-  "y": 130,
-  "width": 160,
-  "height": 24,
-  "rotation": 0
-}
-```
+## Deterministic checks
 
-Coordinates and sizes use the active CorelDRAW document unit. The current COM
-bridge enforces millimeters when possible.
+The current checker reports invalid object size, objects outside page bounds, text below a configurable minimum size, and unnamed objects when requested. A future visual critic/reward model should handle aesthetics; deterministic checks should remain focused on measurable production constraints.
 
-## Import example
+## Safety
 
-```json
-{
-  "file_path": "D:\\CorelAI\\assets\\logo.svg",
-  "name": "brand_logo",
-  "x": 15,
-  "y": 180,
-  "width": 35,
-  "height": 35
-}
-```
-
-The v1 allow-list is SVG, EPS, PDF, AI, CMX, PNG, JPG/JPEG, WEBP and BMP. Import
-uses CorelDRAW's native auto-sense import instead of parsing vector files in
-Python.
-
-## Design check
-
-The initial deterministic checker reports:
-
-- invalid zero/negative object size;
-- objects outside the active page bounds;
-- text below a configurable minimum font size;
-- unnamed objects when `require_named_objects=true`.
-
-This checker is intentionally simple. It is designed to be combined later with
-a visual critic/reward model rather than pretending deterministic rules can
-judge aesthetics.
-
-## Safety notes
-
-The API can open/import/save files from the local machine. Keep the service on
-localhost. Before exposing it to another machine, add authentication and a
-filesystem sandbox/allow-list for readable and writable directories.
+The service binds to localhost. Do not expose the API publicly without authentication and a filesystem sandbox. File import paths are local machine paths and should be treated as privileged input.
