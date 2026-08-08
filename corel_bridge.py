@@ -58,15 +58,29 @@ class CorelDrawBridge:
                     pythoncom.CoInitialize()
                     com_initialized = True
 
-                app = self._dispatcher("CorelDRAW.Application")
+                try:
+                    app = win32_client.GetActiveObject("CorelDRAW.Application")
+                except Exception:
+                    app = self._dispatcher("CorelDRAW.Application")
+
                 app.Visible = True
-                doc = (
-                    app.CreateDocument()
-                    if int(app.Documents.Count) == 0
-                    else app.ActiveDocument
-                )
+                doc = getattr(app, "ActiveDocument", None)
+                if doc is None or int(getattr(app.Documents, "Count", 0)) == 0:
+                    doc = app.CreateDocument()
+
+                try:
+                    doc.Unit = 4  # Enforce cdrMillimeter (4)
+                except Exception:
+                    pass
+
                 self.last_error = None
                 yield app, doc
+                try:
+                    if hasattr(app, "ActiveWindow") and app.ActiveWindow is not None:
+                        app.ActiveWindow.ActiveView.ToFitPage()
+                        app.ActiveWindow.Refresh()
+                except Exception:
+                    pass
             except CorelDrawBridgeError:
                 raise
             except Exception as exc:
@@ -212,8 +226,18 @@ class CorelDrawBridge:
         """Save the active document as an editable CorelDRAW .cdr file."""
 
         target = self._normalize_output_path(path, ".cdr")
-        with self.session() as (_app, doc):
-            doc.SaveAs(str(target))
+        with self.session() as (app, doc):
+            try:
+                options = app.CreateStructSaveAsOptions()
+                options.Overwrite = True
+                doc.SaveAs(str(target), options)
+            except Exception:
+                try:
+                    doc.SaveAs(str(target))
+                except Exception as exc:
+                    raise CorelDrawBridgeError(
+                        f"Không thể lưu file CDR tại '{target}': {exc}"
+                    ) from exc
         return str(target)
 
     def list_shape_names(self) -> list[str]:
