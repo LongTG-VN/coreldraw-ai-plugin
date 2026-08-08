@@ -61,6 +61,26 @@ class DesignBridge:
         except (TypeError, ValueError):
             return str(value)
 
+    @staticmethod
+    def _set_position(shape: Any, x: float, y: float) -> None:
+        try:
+            shape.SetPosition(x, y)
+        except Exception:
+            try:
+                shape.LeftX = x
+                shape.BottomY = y
+            except Exception:
+                shape.PositionX = x
+                shape.PositionY = y
+
+    @staticmethod
+    def _set_size(shape: Any, width: float, height: float) -> None:
+        try:
+            shape.SetSize(width, height)
+        except Exception:
+            shape.SizeWidth = width
+            shape.SizeHeight = height
+
     def _shape_snapshot(self, shape: Any) -> dict[str, Any]:
         nested = getattr(shape, "Shapes", None)
         child_count = 0
@@ -121,6 +141,45 @@ class DesignBridge:
                 "objects": items,
             }
 
+    def _transform_shape_object(
+        self,
+        shape: Any,
+        *,
+        x: float | None = None,
+        y: float | None = None,
+        width: float | None = None,
+        height: float | None = None,
+        rotation: float | None = None,
+    ) -> dict[str, Any]:
+        current_x = self._float(
+            getattr(shape, "LeftX", getattr(shape, "PositionX", 0))
+        )
+        current_y = self._float(
+            getattr(shape, "BottomY", getattr(shape, "PositionY", 0))
+        )
+        current_width = self._float(getattr(shape, "SizeWidth", 0))
+        current_height = self._float(getattr(shape, "SizeHeight", 0))
+
+        if width is not None or height is not None:
+            target_width = width if width is not None else current_width
+            target_height = height if height is not None else current_height
+            self._set_size(shape, target_width, target_height)
+
+        if x is not None or y is not None:
+            target_x = x if x is not None else current_x
+            target_y = y if y is not None else current_y
+            self._set_position(shape, target_x, target_y)
+
+        if rotation is not None:
+            try:
+                shape.RotationAngle = rotation
+            except Exception as exc:
+                raise CorelDrawBridgeError(
+                    f"Không thể xoay shape '{getattr(shape, 'Name', '')}': {exc}"
+                ) from exc
+
+        return self._shape_snapshot(shape)
+
     def transform_shape(
         self,
         shape_name: str,
@@ -140,42 +199,47 @@ class DesignBridge:
 
         with self.bridge.session() as (_app, doc):
             shape = self.bridge._find_shape_in_document(doc, shape_name)
-            current_x = self._float(
-                getattr(shape, "LeftX", getattr(shape, "PositionX", 0))
+            return self._transform_shape_object(
+                shape,
+                x=x,
+                y=y,
+                width=width,
+                height=height,
+                rotation=rotation,
             )
-            current_y = self._float(
-                getattr(shape, "BottomY", getattr(shape, "PositionY", 0))
-            )
-            current_width = self._float(getattr(shape, "SizeWidth", 0))
-            current_height = self._float(getattr(shape, "SizeHeight", 0))
 
-            if width is not None or height is not None:
-                target_width = width if width is not None else current_width
-                target_height = height if height is not None else current_height
-                try:
-                    shape.SetSize(target_width, target_height)
-                except Exception:
-                    shape.SizeWidth = target_width
-                    shape.SizeHeight = target_height
+    def batch_transform(self, operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Apply multiple transforms while holding one serialized COM session."""
 
-            if x is not None or y is not None:
-                target_x = x if x is not None else current_x
-                target_y = y if y is not None else current_y
-                try:
-                    shape.SetPosition(target_x, target_y)
-                except Exception:
-                    shape.PositionX = target_x
-                    shape.PositionY = target_y
+        if not operations:
+            raise CorelDrawBridgeError("operations không được rỗng.")
+        if len(operations) > 500:
+            raise CorelDrawBridgeError("Tối đa 500 transforms cho một request.")
 
-            if rotation is not None:
-                try:
-                    shape.RotationAngle = rotation
-                except Exception as exc:
-                    raise CorelDrawBridgeError(
-                        f"Không thể xoay shape '{shape_name}': {exc}"
-                    ) from exc
-
-            return self._shape_snapshot(shape)
+        results: list[dict[str, Any]] = []
+        with self.bridge.session() as (_app, doc):
+            for operation in operations:
+                name = str(operation.get("shape_name") or "").strip()
+                if not name:
+                    raise CorelDrawBridgeError("Mỗi operation phải có shape_name.")
+                width = operation.get("width")
+                height = operation.get("height")
+                if width is not None and float(width) <= 0:
+                    raise CorelDrawBridgeError("width phải lớn hơn 0.")
+                if height is not None and float(height) <= 0:
+                    raise CorelDrawBridgeError("height phải lớn hơn 0.")
+                shape = self.bridge._find_shape_in_document(doc, name)
+                results.append(
+                    self._transform_shape_object(
+                        shape,
+                        x=operation.get("x"),
+                        y=operation.get("y"),
+                        width=width,
+                        height=height,
+                        rotation=operation.get("rotation"),
+                    )
+                )
+        return results
 
     def duplicate_shape(
         self,
@@ -220,6 +284,300 @@ class DesignBridge:
                 ) from exc
             return self._shape_snapshot(shape)
 
+    def set_typography(
+        self,
+        shape_name: str,
+        *,
+        text: str | None = None,
+        font_name: str | None = None,
+        font_size: float | None = None,
+    ) -> dict[str, Any]:
+        """Update editable text content and basic typography properties."""
+
+        if font_size is not None and font_size <= 0:
+            raise CorelDrawBridgeError("font_size phải lớn hơn 0.")
+        with self.bridge.session() as (_app, doc):
+            shape = self.bridge._find_shape_in_document(doc, shape_name)
+            try:
+                story = shape.Text.Story
+            except Exception as exc:
+                raise CorelDrawBridgeError(
+                    f"Shape '{shape_name}' không phải text có thể chỉnh sửa."
+                ) from exc
+
+            try:
+                if text is not None:
+                    try:
+                        story.Text = text
+                    except Exception:
+                        shape.Text.Story = text
+                if font_name is not None:
+                    story.Font = font_name
+                if font_size is not None:
+                    story.Size = font_size
+            except Exception as exc:
+                raise CorelDrawBridgeError(
+                    f"Không thể cập nhật typography cho '{shape_name}': {exc}"
+                ) from exc
+            return self._shape_snapshot(shape)
+
+    def order_shape(
+        self,
+        shape_name: str,
+        mode: str,
+        *,
+        relative_to: str | None = None,
+    ) -> dict[str, Any]:
+        """Change stacking order using CorelDRAW's native ordering methods."""
+
+        normalized = mode.strip().lower()
+        allowed = {"front", "back", "front_of", "back_of"}
+        if normalized not in allowed:
+            raise CorelDrawBridgeError(
+                "mode phải là front, back, front_of hoặc back_of."
+            )
+        if normalized in {"front_of", "back_of"} and not relative_to:
+            raise CorelDrawBridgeError("relative_to là bắt buộc cho *_of.")
+
+        with self.bridge.session() as (_app, doc):
+            shape = self.bridge._find_shape_in_document(doc, shape_name)
+            try:
+                if normalized == "front":
+                    shape.OrderToFront()
+                elif normalized == "back":
+                    shape.OrderToBack()
+                else:
+                    reference = self.bridge._find_shape_in_document(doc, str(relative_to))
+                    if normalized == "front_of":
+                        shape.OrderFrontOf(reference)
+                    else:
+                        shape.OrderBackOf(reference)
+            except Exception as exc:
+                raise CorelDrawBridgeError(
+                    f"Không thể đổi z-order cho '{shape_name}': {exc}"
+                ) from exc
+            result = self._shape_snapshot(shape)
+            result["order_mode"] = normalized
+            if relative_to:
+                result["relative_to"] = relative_to
+            return result
+
+    @staticmethod
+    def _selection_bounds(items: list[dict[str, Any]]) -> dict[str, float]:
+        left = min(float(item["x"]) for item in items)
+        bottom = min(float(item["y"]) for item in items)
+        right = max(float(item["x"]) + float(item["width"]) for item in items)
+        top = max(float(item["y"]) + float(item["height"]) for item in items)
+        return {
+            "left": left,
+            "bottom": bottom,
+            "right": right,
+            "top": top,
+            "center_x": (left + right) / 2,
+            "center_y": (bottom + top) / 2,
+        }
+
+    def align_shapes(
+        self,
+        shape_names: list[str],
+        *,
+        horizontal: str | None = None,
+        vertical: str | None = None,
+        relative_to: str = "selection",
+    ) -> list[dict[str, Any]]:
+        """Align objects deterministically to selection bounds or the active page."""
+
+        names = list(dict.fromkeys(shape_names))
+        if len(names) < 2:
+            raise CorelDrawBridgeError("Cần ít nhất 2 shape để align.")
+        if horizontal is None and vertical is None:
+            raise CorelDrawBridgeError("Phải truyền horizontal hoặc vertical.")
+
+        h = horizontal.lower() if horizontal else None
+        v = vertical.lower() if vertical else None
+        if h not in {None, "left", "center", "right"}:
+            raise CorelDrawBridgeError("horizontal phải là left, center hoặc right.")
+        if v not in {None, "bottom", "center", "top"}:
+            raise CorelDrawBridgeError("vertical phải là bottom, center hoặc top.")
+        target = relative_to.strip().lower()
+        if target not in {"selection", "page"}:
+            raise CorelDrawBridgeError("relative_to phải là selection hoặc page.")
+
+        with self.bridge.session() as (_app, doc):
+            shapes = [self.bridge._find_shape_in_document(doc, name) for name in names]
+            items = [self._shape_snapshot(shape) for shape in shapes]
+            if target == "page":
+                page = doc.ActivePage
+                width = self._float(getattr(page, "SizeWidth", 0))
+                height = self._float(getattr(page, "SizeHeight", 0))
+                bounds = {
+                    "left": 0.0,
+                    "bottom": 0.0,
+                    "right": width,
+                    "top": height,
+                    "center_x": width / 2,
+                    "center_y": height / 2,
+                }
+            else:
+                bounds = self._selection_bounds(items)
+
+            results: list[dict[str, Any]] = []
+            for shape, item in zip(shapes, items):
+                x = float(item["x"])
+                y = float(item["y"])
+                width = float(item["width"])
+                height = float(item["height"])
+
+                if h == "left":
+                    x = bounds["left"]
+                elif h == "center":
+                    x = bounds["center_x"] - width / 2
+                elif h == "right":
+                    x = bounds["right"] - width
+
+                if v == "bottom":
+                    y = bounds["bottom"]
+                elif v == "center":
+                    y = bounds["center_y"] - height / 2
+                elif v == "top":
+                    y = bounds["top"] - height
+
+                self._set_position(shape, x, y)
+                results.append(self._shape_snapshot(shape))
+            return results
+
+    def distribute_shapes(
+        self,
+        shape_names: list[str],
+        *,
+        axis: str,
+        mode: str = "gaps",
+    ) -> list[dict[str, Any]]:
+        """Distribute three or more objects evenly by gaps or centers."""
+
+        names = list(dict.fromkeys(shape_names))
+        if len(names) < 3:
+            raise CorelDrawBridgeError("Cần ít nhất 3 shape để distribute.")
+        axis_name = axis.strip().lower()
+        mode_name = mode.strip().lower()
+        if axis_name not in {"horizontal", "vertical"}:
+            raise CorelDrawBridgeError("axis phải là horizontal hoặc vertical.")
+        if mode_name not in {"gaps", "centers"}:
+            raise CorelDrawBridgeError("mode phải là gaps hoặc centers.")
+
+        with self.bridge.session() as (_app, doc):
+            shapes = [self.bridge._find_shape_in_document(doc, name) for name in names]
+            records = [(shape, self._shape_snapshot(shape)) for shape in shapes]
+            key = "x" if axis_name == "horizontal" else "y"
+            size_key = "width" if axis_name == "horizontal" else "height"
+            records.sort(key=lambda pair: float(pair[1][key]))
+
+            first = records[0][1]
+            last = records[-1][1]
+            if mode_name == "centers":
+                first_center = float(first[key]) + float(first[size_key]) / 2
+                last_center = float(last[key]) + float(last[size_key]) / 2
+                step = (last_center - first_center) / (len(records) - 1)
+                for index, (shape, item) in enumerate(records[1:-1], start=1):
+                    target_center = first_center + step * index
+                    coordinate = target_center - float(item[size_key]) / 2
+                    if axis_name == "horizontal":
+                        self._set_position(shape, coordinate, float(item["y"]))
+                    else:
+                        self._set_position(shape, float(item["x"]), coordinate)
+            else:
+                start = float(first[key])
+                end = float(last[key]) + float(last[size_key])
+                total_size = sum(float(item[size_key]) for _, item in records)
+                gap = (end - start - total_size) / (len(records) - 1)
+                cursor = start + float(first[size_key]) + gap
+                for shape, item in records[1:-1]:
+                    if axis_name == "horizontal":
+                        self._set_position(shape, cursor, float(item["y"]))
+                    else:
+                        self._set_position(shape, float(item["x"]), cursor)
+                    cursor += float(item[size_key]) + gap
+
+            return [self._shape_snapshot(shape) for shape, _ in records]
+
+    def set_page_size(self, width: float, height: float) -> dict[str, float]:
+        """Resize the active page in the current document unit."""
+
+        if width <= 0 or height <= 0:
+            raise CorelDrawBridgeError("Page width/height phải lớn hơn 0.")
+        with self.bridge.session() as (_app, doc):
+            page = doc.ActivePage
+            try:
+                page.SetSize(width, height)
+            except Exception:
+                try:
+                    page.SizeWidth = width
+                    page.SizeHeight = height
+                except Exception as exc:
+                    raise CorelDrawBridgeError(
+                        f"Không thể resize active page: {exc}"
+                    ) from exc
+            return {
+                "width": self._float(getattr(page, "SizeWidth", width), width),
+                "height": self._float(getattr(page, "SizeHeight", height), height),
+            }
+
+    def fit_shape_to_frame(
+        self,
+        shape_name: str,
+        frame_shape_name: str,
+        *,
+        mode: str = "cover",
+        powerclip: bool = False,
+        lock_contents: bool = True,
+    ) -> dict[str, Any]:
+        """Aspect-fit/cover an object to a named frame and optionally PowerClip it."""
+
+        fit_mode = mode.strip().lower()
+        if fit_mode not in {"contain", "cover"}:
+            raise CorelDrawBridgeError("mode phải là contain hoặc cover.")
+
+        with self.bridge.session() as (_app, doc):
+            shape = self.bridge._find_shape_in_document(doc, shape_name)
+            frame = self.bridge._find_shape_in_document(doc, frame_shape_name)
+            item = self._shape_snapshot(shape)
+            frame_item = self._shape_snapshot(frame)
+            source_width = float(item["width"])
+            source_height = float(item["height"])
+            frame_width = float(frame_item["width"])
+            frame_height = float(frame_item["height"])
+            if min(source_width, source_height, frame_width, frame_height) <= 0:
+                raise CorelDrawBridgeError("Shape/frame phải có kích thước dương.")
+
+            scale_x = frame_width / source_width
+            scale_y = frame_height / source_height
+            scale = min(scale_x, scale_y) if fit_mode == "contain" else max(scale_x, scale_y)
+            new_width = source_width * scale
+            new_height = source_height * scale
+            new_x = float(frame_item["x"]) + (frame_width - new_width) / 2
+            new_y = float(frame_item["y"]) + (frame_height - new_height) / 2
+            self._set_size(shape, new_width, new_height)
+            self._set_position(shape, new_x, new_y)
+
+            if powerclip:
+                try:
+                    shape.AddToPowerClip(frame)
+                    try:
+                        frame.PowerClip.ContentsLocked = lock_contents
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    raise CorelDrawBridgeError(
+                        f"Không thể PowerClip '{shape_name}' vào '{frame_shape_name}': {exc}"
+                    ) from exc
+
+            return {
+                "mode": fit_mode,
+                "powerclip": powerclip,
+                "frame": self._shape_snapshot(frame),
+                "object": self._shape_snapshot(shape),
+            }
+
     def import_asset(
         self,
         file_path: str,
@@ -261,19 +619,11 @@ class DesignBridge:
             if width is not None or height is not None:
                 target_width = width if width is not None else current["width"]
                 target_height = height if height is not None else current["height"]
-                try:
-                    imported.SetSize(target_width, target_height)
-                except Exception:
-                    imported.SizeWidth = target_width
-                    imported.SizeHeight = target_height
+                self._set_size(imported, target_width, target_height)
             if x is not None or y is not None:
                 target_x = x if x is not None else current["x"]
                 target_y = y if y is not None else current["y"]
-                try:
-                    imported.SetPosition(target_x, target_y)
-                except Exception:
-                    imported.PositionX = target_x
-                    imported.PositionY = target_y
+                self._set_position(imported, target_x, target_y)
             result = self._shape_snapshot(imported)
             result["source_path"] = str(source)
             return result
