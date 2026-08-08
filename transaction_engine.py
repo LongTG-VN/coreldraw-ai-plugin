@@ -39,15 +39,24 @@ class DesignTransactionEngine:
         return value
 
     @staticmethod
-    def _color(operation: dict[str, Any]) -> tuple[int, int, int, int]:
-        payload = operation.get("color") or {}
+    def _color(
+        operation: dict[str, Any],
+        *,
+        default: tuple[int, int, int, int] = (0, 0, 0, 0),
+        required: bool = False,
+    ) -> tuple[int, int, int, int]:
+        payload = operation.get("color")
+        if payload is None:
+            if required:
+                raise CorelDrawBridgeError("Operation thiếu trường bắt buộc 'color'.")
+            return default
         if not isinstance(payload, dict):
             raise CorelDrawBridgeError("color phải là object CMYK.")
         values = (
-            int(payload.get("cyan", 0)),
-            int(payload.get("magenta", 0)),
-            int(payload.get("yellow", 0)),
-            int(payload.get("black", 0)),
+            int(payload.get("cyan", default[0])),
+            int(payload.get("magenta", default[1])),
+            int(payload.get("yellow", default[2])),
+            int(payload.get("black", default[3])),
         )
         if any(value < 0 or value > 100 for value in values):
             raise CorelDrawBridgeError("CMYK phải nằm trong khoảng 0..100.")
@@ -79,7 +88,8 @@ class DesignTransactionEngine:
             )
         if op == "fill":
             return self.design.set_fill_cmyk(
-                str(self._require(operation, "shape_name")), *self._color(operation)
+                str(self._require(operation, "shape_name")),
+                *self._color(operation, required=True),
             )
         if op == "typography":
             return self.design.set_typography(
@@ -144,7 +154,7 @@ class DesignTransactionEngine:
                     float(self._require(operation, "y")),
                     float(self._require(operation, "width")),
                     float(self._require(operation, "height")),
-                    *self._color(operation),
+                    *self._color(operation, default=(0, 100, 100, 0)),
                     shape_name=operation.get("name"),
                 )
             }
@@ -155,7 +165,7 @@ class DesignTransactionEngine:
                     float(self._require(operation, "y")),
                     float(self._require(operation, "width")),
                     float(self._require(operation, "height")),
-                    *self._color(operation),
+                    *self._color(operation, default=(100, 0, 0, 0)),
                     shape_name=operation.get("name"),
                 )
             }
@@ -167,7 +177,7 @@ class DesignTransactionEngine:
                     float(self._require(operation, "y")),
                     str(operation.get("font_name", "Arial")),
                     float(operation.get("font_size", 24)),
-                    *self._color(operation),
+                    *self._color(operation, default=(0, 0, 0, 100)),
                     shape_name=operation.get("name"),
                 )
             }
@@ -176,7 +186,7 @@ class DesignTransactionEngine:
                 "shape_name": self.advanced.set_shape_outline_cmyk(
                     str(self._require(operation, "shape_name")),
                     float(self._require(operation, "width")),
-                    *self._color(operation),
+                    *self._color(operation, default=(0, 0, 0, 100)),
                 )
             }
         if op == "group":
