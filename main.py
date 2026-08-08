@@ -21,9 +21,10 @@ app = FastAPI(
     title="CorelDRAW AI Agent Plugin Server",
     description=(
         "Local REST API cho phép Docker UI hoặc AI Agent điều khiển CorelDRAW, "
-        "inspect canvas, edit objects, fill template, chèn asset và xuất file sản xuất."
+        "inspect canvas, edit objects, compose layout, fill template, chèn asset "
+        "và xuất file sản xuất."
     ),
-    version="1.4.0",
+    version="1.5.0",
 )
 
 app.add_middleware(
@@ -136,6 +137,10 @@ class TransformShapeRequest(BaseModel):
     rotation: Optional[float] = Field(default=None, ge=-360_000, le=360_000)
 
 
+class BatchTransformRequest(BaseModel):
+    operations: list[TransformShapeRequest] = Field(min_length=1, max_length=500)
+
+
 class DuplicateShapeRequest(BaseModel):
     shape_name: str = Field(min_length=1, max_length=120)
     offset_x: float = 0
@@ -146,6 +151,45 @@ class DuplicateShapeRequest(BaseModel):
 class FillShapeRequest(BaseModel):
     shape_name: str = Field(min_length=1, max_length=120)
     color: CMYKColor
+
+
+class TypographyRequest(BaseModel):
+    shape_name: str = Field(min_length=1, max_length=120)
+    text: Optional[str] = Field(default=None, max_length=20_000)
+    font_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    font_size: Optional[float] = Field(default=None, gt=0, le=2_000)
+
+
+class OrderShapeRequest(BaseModel):
+    shape_name: str = Field(min_length=1, max_length=120)
+    mode: Literal["front", "back", "front_of", "back_of"]
+    relative_to: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+class AlignShapesRequest(BaseModel):
+    shape_names: list[str] = Field(min_length=2, max_length=500)
+    horizontal: Optional[Literal["left", "center", "right"]] = None
+    vertical: Optional[Literal["bottom", "center", "top"]] = None
+    relative_to: Literal["selection", "page"] = "selection"
+
+
+class DistributeShapesRequest(BaseModel):
+    shape_names: list[str] = Field(min_length=3, max_length=500)
+    axis: Literal["horizontal", "vertical"]
+    mode: Literal["gaps", "centers"] = "gaps"
+
+
+class PageResizeRequest(BaseModel):
+    width: float = Field(gt=0)
+    height: float = Field(gt=0)
+
+
+class FitToFrameRequest(BaseModel):
+    shape_name: str = Field(min_length=1, max_length=120)
+    frame_shape_name: str = Field(min_length=1, max_length=120)
+    mode: Literal["contain", "cover"] = "cover"
+    powerclip: bool = False
+    lock_contents: bool = True
 
 
 class DeleteShapeRequest(BaseModel):
@@ -363,6 +407,13 @@ def design_transform(req: TransformShapeRequest) -> dict[str, object]:
     return {"status": "success", "object": result}
 
 
+@app.post("/api/v1/design/objects/batch-transform")
+def design_batch_transform(req: BatchTransformRequest) -> dict[str, object]:
+    operations = [operation.model_dump(exclude_none=True) for operation in req.operations]
+    results = DesignBridge(corel_bridge).batch_transform(operations)
+    return {"status": "success", "count": len(results), "objects": results}
+
+
 @app.post("/api/v1/design/object/duplicate")
 def design_duplicate(req: DuplicateShapeRequest) -> dict[str, object]:
     result = DesignBridge(corel_bridge).duplicate_shape(
@@ -380,6 +431,62 @@ def design_fill(req: FillShapeRequest) -> dict[str, object]:
         req.shape_name, *req.color.as_tuple()
     )
     return {"status": "success", "object": result}
+
+
+@app.post("/api/v1/design/object/typography")
+def design_typography(req: TypographyRequest) -> dict[str, object]:
+    result = DesignBridge(corel_bridge).set_typography(
+        req.shape_name,
+        text=req.text,
+        font_name=req.font_name,
+        font_size=req.font_size,
+    )
+    return {"status": "success", "object": result}
+
+
+@app.post("/api/v1/design/object/order")
+def design_order(req: OrderShapeRequest) -> dict[str, object]:
+    result = DesignBridge(corel_bridge).order_shape(
+        req.shape_name, req.mode, relative_to=req.relative_to
+    )
+    return {"status": "success", "object": result}
+
+
+@app.post("/api/v1/design/objects/align")
+def design_align(req: AlignShapesRequest) -> dict[str, object]:
+    results = DesignBridge(corel_bridge).align_shapes(
+        req.shape_names,
+        horizontal=req.horizontal,
+        vertical=req.vertical,
+        relative_to=req.relative_to,
+    )
+    return {"status": "success", "count": len(results), "objects": results}
+
+
+@app.post("/api/v1/design/objects/distribute")
+def design_distribute(req: DistributeShapesRequest) -> dict[str, object]:
+    results = DesignBridge(corel_bridge).distribute_shapes(
+        req.shape_names, axis=req.axis, mode=req.mode
+    )
+    return {"status": "success", "count": len(results), "objects": results}
+
+
+@app.post("/api/v1/design/page/resize")
+def design_page_resize(req: PageResizeRequest) -> dict[str, object]:
+    page = DesignBridge(corel_bridge).set_page_size(req.width, req.height)
+    return {"status": "success", "page": page}
+
+
+@app.post("/api/v1/design/object/fit-to-frame")
+def design_fit_to_frame(req: FitToFrameRequest) -> dict[str, object]:
+    result = DesignBridge(corel_bridge).fit_shape_to_frame(
+        req.shape_name,
+        req.frame_shape_name,
+        mode=req.mode,
+        powerclip=req.powerclip,
+        lock_contents=req.lock_contents,
+    )
+    return {"status": "success", **result}
 
 
 @app.post("/api/v1/design/object/delete")
