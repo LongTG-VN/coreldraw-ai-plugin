@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,15 +16,16 @@ from design_bridge import DesignBridge
 from extended_bridge import extended_bridge
 from template_engine import TemplateEngine, TemplateRegistry, TemplateRegistryError
 from template_models import MenuRenderRequest
+from transaction_engine import DesignTransactionEngine, DesignTransactionError
 
 app = FastAPI(
     title="CorelDRAW AI Agent Plugin Server",
     description=(
         "Local REST API cho phép Docker UI hoặc AI Agent điều khiển CorelDRAW, "
-        "inspect canvas, edit objects, compose layout, fill template, chèn asset "
-        "và xuất file sản xuất."
+        "inspect canvas, edit objects, compose layout, execute atomic design plans, "
+        "fill template, chèn asset và xuất file sản xuất."
     ),
-    version="1.5.0",
+    version="1.6.0",
 )
 
 app.add_middleware(
@@ -60,17 +61,13 @@ class BaseShapeRequest(BaseModel):
 
 class CreateRectangleCMYKRequest(BaseShapeRequest):
     color: CMYKColor = Field(
-        default_factory=lambda: CMYKColor(
-            cyan=0, magenta=100, yellow=100, black=0
-        )
+        default_factory=lambda: CMYKColor(cyan=0, magenta=100, yellow=100, black=0)
     )
 
 
 class CreateEllipseCMYKRequest(BaseShapeRequest):
     color: CMYKColor = Field(
-        default_factory=lambda: CMYKColor(
-            cyan=100, magenta=0, yellow=0, black=0
-        )
+        default_factory=lambda: CMYKColor(cyan=100, magenta=0, yellow=0, black=0)
     )
 
 
@@ -80,11 +77,7 @@ class CreateTextCMYKRequest(BaseModel):
     y: float
     font_name: str = Field(default="Arial", min_length=1, max_length=200)
     font_size: float = Field(default=24.0, gt=0, le=2_000)
-    color: CMYKColor = Field(
-        default_factory=lambda: CMYKColor(
-            cyan=0, magenta=0, yellow=0, black=100
-        )
-    )
+    color: CMYKColor = Field(default_factory=lambda: CMYKColor(black=100))
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
 
 
@@ -207,9 +200,7 @@ class ImportAssetRequest(BaseModel):
 
 class PreviewRequest(BaseModel):
     file_path: str = Field(
-        default="storage/previews/agent-preview.png",
-        min_length=1,
-        max_length=4_096,
+        default="storage/previews/agent-preview.png", min_length=1, max_length=4_096
     )
     dpi: int = Field(default=150, ge=72, le=600)
 
@@ -223,13 +214,47 @@ class UndoRequest(BaseModel):
     steps: int = Field(default=1, ge=1, le=50)
 
 
+class DesignTransactionRequest(BaseModel):
+    name: str = Field(default="Antigravity Design", min_length=1, max_length=160)
+    operations: list[dict[str, Any]] = Field(min_length=1, max_length=200)
+    rollback_on_error: bool = True
+    include_feedback: bool = True
+    preview_path: str = Field(
+        default="storage/previews/agent-transaction.png",
+        min_length=1,
+        max_length=4_096,
+    )
+    preview_dpi: int = Field(default=150, ge=72, le=600)
+    run_check: bool = True
+    min_font_size: float = Field(default=6.0, gt=0, le=500)
+    require_named_objects: bool = False
+
+
+class FeedbackContextRequest(BaseModel):
+    preview_path: str = Field(
+        default="storage/previews/agent-feedback.png",
+        min_length=1,
+        max_length=4_096,
+    )
+    preview_dpi: int = Field(default=150, ge=72, le=600)
+    run_check: bool = True
+    min_font_size: float = Field(default=6.0, gt=0, le=500)
+    require_named_objects: bool = False
+
+
+@app.exception_handler(DesignTransactionError)
+async def handle_transaction_error(
+    _request: Request, exc: DesignTransactionError
+) -> JSONResponse:
+    return JSONResponse(status_code=409, content=exc.report)
+
+
 @app.exception_handler(CorelDrawBridgeError)
 async def handle_corel_error(
     _request: Request, exc: CorelDrawBridgeError
 ) -> JSONResponse:
     return JSONResponse(
-        status_code=503,
-        content={"status": "error", "detail": str(exc)},
+        status_code=503, content={"status": "error", "detail": str(exc)}
     )
 
 
@@ -238,8 +263,7 @@ async def handle_template_error(
     _request: Request, exc: TemplateRegistryError
 ) -> JSONResponse:
     return JSONResponse(
-        status_code=404,
-        content={"status": "error", "detail": str(exc)},
+        status_code=404, content={"status": "error", "detail": str(exc)}
     )
 
 
@@ -350,9 +374,7 @@ def draw_artistic_text(req: CreateTextCMYKRequest) -> dict[str, str]:
 @app.post("/api/v1/corel/shape/outline")
 def set_outline(req: SetOutlineRequest) -> dict[str, str]:
     shape_name = extended_bridge.set_shape_outline_cmyk(
-        req.shape_name,
-        req.width,
-        *req.color.as_tuple(),
+        req.shape_name, req.width, *req.color.as_tuple()
     )
     return {"status": "success", "shape_name": shape_name}
 
@@ -367,9 +389,7 @@ def group_shapes(req: GroupShapesRequest) -> dict[str, str]:
 
 @app.post("/api/v1/corel/export")
 def export_document(req: ExportRequest) -> dict[str, str]:
-    exported_path = extended_bridge.export_document(
-        req.file_path, req.format, req.dpi
-    )
+    exported_path = extended_bridge.export_document(req.file_path, req.format, req.dpi)
     return {
         "status": "success",
         "format": req.format,
@@ -532,6 +552,41 @@ def design_undo(req: UndoRequest) -> dict[str, object]:
     return {"status": "success", **DesignBridge(corel_bridge).undo(req.steps)}
 
 
+@app.post("/api/v1/design/transaction")
+def design_transaction(req: DesignTransactionRequest) -> dict[str, object]:
+    engine = DesignTransactionEngine(
+        corel_bridge, DesignBridge(corel_bridge), extended_bridge
+    )
+    return engine.execute(
+        req.operations,
+        name=req.name,
+        rollback_on_error=req.rollback_on_error,
+        include_feedback=req.include_feedback,
+        preview_path=req.preview_path,
+        preview_dpi=req.preview_dpi,
+        run_check=req.run_check,
+        min_font_size=req.min_font_size,
+        require_named_objects=req.require_named_objects,
+    )
+
+
+@app.post("/api/v1/design/feedback-context")
+def design_feedback_context(req: FeedbackContextRequest) -> dict[str, object]:
+    engine = DesignTransactionEngine(
+        corel_bridge, DesignBridge(corel_bridge), extended_bridge
+    )
+    return {
+        "status": "success",
+        **engine.feedback_context(
+            preview_path=req.preview_path,
+            preview_dpi=req.preview_dpi,
+            run_check=req.run_check,
+            min_font_size=req.min_font_size,
+            require_named_objects=req.require_named_objects,
+        ),
+    }
+
+
 @app.get("/api/v1/templates")
 def list_templates() -> dict[str, object]:
     templates = [registered.public_info() for registered in template_registry.list()]
@@ -544,9 +599,7 @@ def get_template(template_id: str) -> dict[str, object]:
 
 
 @app.post("/api/v1/templates/{template_id}/render-menu")
-def render_menu(
-    template_id: str, request: MenuRenderRequest
-) -> dict[str, object]:
+def render_menu(template_id: str, request: MenuRenderRequest) -> dict[str, object]:
     return template_engine.render_menu(template_id, request)
 
 
