@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 from itertools import combinations
 
 from training.schemas.design import BoundingBox, DesignDocument, DesignElement
@@ -70,11 +71,60 @@ def evaluate_layout(document: DesignDocument) -> dict[str, float | int]:
         if len(text_sizes) >= 2 and min(text_sizes) > 0
         else 1.0
     )
+    tiny_text_count = sum(
+        float(element.bbox_norm.height) < 0.025
+        for element in content_elements
+        if element.text is not None
+    )
+    text_element_count = len(text_sizes)
+    text_overflow_amounts: list[float] = []
+    for element in content_elements:
+        if element.text is None:
+            continue
+        font_size = float(element.text.font_size or 24)
+        box_width = float(element.bbox.width)
+        box_height = float(element.bbox.height)
+        max_chars = max(8, int(box_width / max(font_size * 0.55, 1)))
+        lines = textwrap.wrap(element.text.content, max_chars) or [""]
+        line_height = float(element.text.line_height or font_size)
+        required_height = (
+            len(lines) * line_height
+            + max(0, len(lines) - 1) * font_size * 0.15
+        )
+        overflow = max(0.0, required_height - box_height) / max(box_height, 1e-6)
+        text_overflow_amounts.append(min(overflow, 1.0))
+    signatures = [
+        (
+            element.type,
+            round(float(element.bbox_norm.x), 4),
+            round(float(element.bbox_norm.y), 4),
+            round(float(element.bbox_norm.width), 4),
+            round(float(element.bbox_norm.height), 4),
+            element.text.content.casefold() if element.text is not None else None,
+        )
+        for element in content_elements
+    ]
+    duplicate_element_count = len(signatures) - len(set(signatures))
+    element_ids = [element.id for element in document.elements]
+    duplicate_id_count = len(element_ids) - len(set(element_ids))
+    invalid_dimension_count = sum(
+        float(element.bbox.width) <= 0 or float(element.bbox.height) <= 0
+        for element in elements
+    )
+    outside_count = sum(
+        float(element.bbox_norm.x) < 0
+        or float(element.bbox_norm.y) < 0
+        or float(element.bbox_norm.x + element.bbox_norm.width) > 1
+        or float(element.bbox_norm.y + element.bbox_norm.height) > 1
+        for element in elements
+    )
+    bbox_validity = 1.0 if invalid_dimension_count == 0 else 0.0
+    normalized_validity = 1.0 if outside_count == 0 else 0.0
     coverage = min(total_element_area / canvas_area, 1.0) if canvas_area else 0.0
     return {
-        "bbox_validity": 1.0,
-        "normalized_coordinate_validity": 1.0,
-        "outside_canvas_rate": 0.0,
+        "bbox_validity": bbox_validity,
+        "normalized_coordinate_validity": normalized_validity,
+        "outside_canvas_rate": outside_count / len(elements) if elements else 0.0,
         "overlap_ratio": overlap_area / canvas_area if canvas_area else 0.0,
         "alignment_consistency": _alignment_consistency(content_elements),
         "coverage": coverage,
@@ -83,5 +133,30 @@ def evaluate_layout(document: DesignDocument) -> dict[str, float | int]:
         "element_count": len(elements),
         "content_element_count": len(content_elements),
         "background_element_count": len(elements) - len(content_elements),
-        "text_element_count": len(text_sizes),
+        "text_element_count": text_element_count,
+        "tiny_text_count": tiny_text_count,
+        "tiny_text_rate": (
+            tiny_text_count / text_element_count if text_element_count else 0.0
+        ),
+        "text_fit_rate": (
+            sum(amount == 0 for amount in text_overflow_amounts)
+            / len(text_overflow_amounts)
+            if text_overflow_amounts
+            else 1.0
+        ),
+        "text_overflow_rate": (
+            sum(text_overflow_amounts) / len(text_overflow_amounts)
+            if text_overflow_amounts
+            else 0.0
+        ),
+        "text_overflow_count": sum(amount > 0 for amount in text_overflow_amounts),
+        "invalid_dimension_count": invalid_dimension_count,
+        "duplicate_id_count": duplicate_id_count,
+        "duplicate_element_count": duplicate_element_count,
+        "duplicate_element_rate": (
+            duplicate_element_count / len(content_elements)
+            if content_elements
+            else 0.0
+        ),
+        "excessive_element_count": max(0, len(content_elements) - 16),
     }

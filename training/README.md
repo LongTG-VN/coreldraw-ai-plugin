@@ -192,3 +192,24 @@ and the remaining raw-schema limitation.
 
 The GenPoster-derived adapter is always `research_only` and must not be shipped
 as a production/commercial checkpoint.
+
+## 14. Design AI v0.2 best-of-N selection
+
+The v0.2 inference layer reuses one loaded 4-bit Qwen3 session to generate up
+to eight deterministic seeded candidates, validates and compiles each valid
+design, renders previews, applies hard technical gates plus a versioned offline
+aesthetic heuristic, and persists a ranked final selection. It also exports
+explicit auto/human chosen-rejected records without relabeling research data.
+
+Run artifacts include every raw response, validation/recovery details, Corel
+operations, preview, metric, score, ranking, contact sheet, comparison HTML,
+and selection provenance. Existing run directories are never overwritten.
+See `docs/DESIGN_AI_V0_2_SELECTION.md` for exact rules, commands, failure
+behavior, smoke measurements, and the benchmark protocol.
+
+The verified 13-prompt run uses critic v0.2.3 and records a 16.7298% average
+best-of-4 uplift (0.650236 -> 0.759019), 52/52 schema-eligible candidates,
+overlap reduction from 0.200695 to 0.041277, and text-fit improvement from
+0.397436 to 0.498077. This is a research-only heuristic benchmark, not a claim
+of professional visual quality. Representative manual findings are documented
+in `docs/DESIGN_AI_V0_2_HUMAN_REVIEW.md`.

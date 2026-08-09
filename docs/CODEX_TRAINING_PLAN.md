@@ -351,3 +351,24 @@ Antigravity converts/validates this into the existing transaction endpoint and p
   500 records until direct schema adherence improves.
 - The checkpoint remains research-only because its SFT data is derived from
   GenPoster100K CC-BY-NC-4.0.
+
+## Verified Design AI v0.2 checkpoint — 2026-08-09
+
+- The v0.1 Qwen3-1.7B NF4 QLoRA checkpoint is unchanged; v0.2 adds sequential
+  seeded best-of-N generation and selection without a new training run.
+- Each candidate persists raw output, explicit recovery/validation, unified
+  `design.json`, Corel operations, preview, metrics, score, and provenance.
+- Technical hard gates prevent invalid candidates from winning; heuristic
+  critic v0.2.3 additionally measures text fit and penalizes truncated output.
+- The 13-prompt/52-candidate benchmark improves the composite score from
+  0.650236 to 0.759019 (+16.7298%), passing the requested 10% target.
+- Mean overlap falls from 0.200695 to 0.041277 and spacing rises from 0.589770
+  to 0.872212; hierarchy falls from 0.751865 to 0.698028 and remains a known
+  limitation.
+- Auto preference records are explicitly non-human and research-only. Human
+  preference export requires explicit valid chosen/rejected IDs.
+- Manual visual inspection confirms useful ranking on menu examples but also
+  shows that the sale family remains unusable due to glyph overflow. The score
+  target is not a production-quality claim.
+- The next justified milestone is v0.3 design retrieval/reference grounding,
+  not 5K training or a full reward-model phase.

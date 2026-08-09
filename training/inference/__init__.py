@@ -7,6 +7,11 @@ from training.inference.qwen3_planner import (
     generate_with_checkpoint,
     parse_design_output,
     planner_messages,
+    Qwen3PlannerSession,
+)
+from training.inference.candidates import (
+    BestOfNSelector,
+    CandidateGenerationSettings,
 )
 
 __all__ = [
@@ -17,4 +22,7 @@ __all__ = [
     "generate_with_checkpoint",
     "parse_design_output",
     "planner_messages",
+    "Qwen3PlannerSession",
+    "BestOfNSelector",
+    "CandidateGenerationSettings",
 ]

@@ -1,0 +1,99 @@
+{
+  "benchmark_id": "design-ai-v0.2-multicategory-v1",
+  "score_target_improvement_percent": 10.0,
+  "prompts": [
+    {
+      "id": "spa_luxury",
+      "category": "spa",
+      "prompt": "Thiết kế poster spa cao cấp màu kem và vàng, headline SPA AN NHIÊN, CTA Đặt lịch hôm nay, phong cách tối giản sang trọng",
+      "width_mm": 400,
+      "height_mm": 120
+    },
+    {
+      "id": "nail_pastel",
+      "category": "nail",
+      "prompt": "Poster tiệm nail trẻ trung pastel hồng tím, tiêu đề LUNA NAIL, ưu đãi giảm 20%, CTA Inbox đặt lịch",
+      "width_mm": 108,
+      "height_mm": 135
+    },
+    {
+      "id": "salon_black",
+      "category": "salon",
+      "prompt": "Poster salon tóc hiện đại nền đen bạc, headline NEW LOOK SALON, liệt kê cắt uốn nhuộm và số điện thoại",
+      "width_mm": 108,
+      "height_mm": 135
+    },
+    {
+      "id": "cafe_vintage",
+      "category": "cafe",
+      "prompt": "Poster khai trương quán cafe phong cách vintage nâu kem, headline MỘC CAFE, ngày 20/08, ưu đãi mua 1 tặng 1",
+      "width_mm": 100,
+      "height_mm": 140
+    },
+    {
+      "id": "milk_tea_social",
+      "category": "tra_sua",
+      "prompt": "Social post trà sữa năng động màu cam xanh, tiêu đề SUMMER BOBA, combo 49K, CTA Order Now",
+      "width_mm": 108,
+      "height_mm": 108
+    },
+    {
+      "id": "restaurant_menu",
+      "category": "nha_hang",
+      "prompt": "Menu nhà hàng Việt trang nhã đỏ vàng, gồm 6 món chính, tên QUÊ NHÀ, giá dễ đọc và khu vực logo",
+      "width_mm": 210,
+      "height_mm": 297,
+      "max_new_tokens": 768
+    },
+    {
+      "id": "sale_bold",
+      "category": "poster_sale",
+      "prompt": "Poster MEGA SALE 50% cực nổi bật đỏ đen, hierarchy mạnh, có thời gian 3 ngày và CTA Mua ngay",
+      "width_mm": 108,
+      "height_mm": 135
+    },
+    {
+      "id": "grand_opening",
+      "category": "khai_truong",
+      "prompt": "Poster khai trương cửa hàng phong cách lễ hội đỏ vàng, headline GRAND OPENING, ngày 25/08, quà tặng 100 khách đầu tiên",
+      "width_mm": 120,
+      "height_mm": 160
+    },
+    {
+      "id": "cosmetics_clean",
+      "category": "my_pham",
+      "prompt": "Poster mỹ phẩm serum dưỡng sáng tối giản trắng xanh lá, tên PURE GLOW, ba lợi ích ngắn và CTA Khám phá ngay",
+      "width_mm": 108,
+      "height_mm": 135
+    },
+    {
+      "id": "signage_wide",
+      "category": "bang_hieu",
+      "prompt": "Bảng hiệu ngang cho PHỞ GIA TRUYỀN, màu đỏ vàng dễ nhìn từ xa, có hotline và địa chỉ ngắn",
+      "width_mm": 500,
+      "height_mm": 100
+    },
+    {
+      "id": "business_card",
+      "category": "card_visit",
+      "prompt": "Card visit tối giản xanh navy cho kiến trúc sư Minh Anh, gồm chức danh, điện thoại, email và logo placeholder",
+      "width_mm": 90,
+      "height_mm": 54
+    },
+    {
+      "id": "social_banner",
+      "category": "banner_social",
+      "prompt": "Banner social workshop Digital Marketing màu xanh tím gradient, headline GROWTH 2026, diễn giả, thời gian và nút Đăng ký",
+      "width_mm": 120,
+      "height_mm": 62.8
+    },
+    {
+      "id": "dense_food_menu",
+      "category": "menu",
+      "prompt": "Menu quán ăn nhanh nền sáng, 10 món chia 3 nhóm, giá căn thẳng hàng, headline BẾP NHÀ và hotline ở cuối",
+      "width_mm": 210,
+      "height_mm": 297,
+      "max_new_tokens": 1024
+    }
+  ]
+}
