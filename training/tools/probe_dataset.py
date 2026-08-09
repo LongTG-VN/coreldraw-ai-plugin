@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Iterable
+
+# Support the documented direct invocation:
+# ``python training/tools/probe_dataset.py ...``.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from training.tools.bootstrap import CONFIG_PATH, REPO_ROOT, load_registry
 
@@ -25,6 +31,18 @@ def _layer_count(layers: Any) -> int:
         lengths = [len(value) for value in layers.values() if isinstance(value, list)]
         return max(lengths, default=0)
     return 0
+
+
+def _first_psd_size(layers: Any) -> list[int] | None:
+    if not isinstance(layers, dict):
+        return None
+    values = layers.get("psd_size")
+    if not isinstance(values, list):
+        return None
+    for value in values:
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            return [int(value[0]), int(value[1])]
+    return None
 
 
 def _first_texts(layers: Any, limit: int = 5) -> list[str]:
@@ -49,7 +67,8 @@ def summarize_row(source: str, row: dict[str, Any], index: int) -> dict[str, Any
         return {
             "sample_index": index,
             "upstream_id": row.get("id"),
-            "canvas_size": _safe_size(row.get("background_image"))
+            "canvas_size": _first_psd_size(layers)
+            or _safe_size(row.get("background_image"))
             or _safe_size(row.get("merged_image")),
             "layer_count": _layer_count(layers),
             "sample_texts": _first_texts(layers),
@@ -103,7 +122,7 @@ def probe_rows(
         source_config["dataset_id"],
         split=source_config.get("split", "train"),
         streaming=True,
-    )
+    ).decode(False)
     for index, row in enumerate(dataset):
         if index >= limit:
             break

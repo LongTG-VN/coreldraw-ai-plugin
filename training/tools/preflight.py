@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
+import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -65,6 +68,68 @@ def detect_nvidia_gpus() -> list[dict[str, Any]]:
     return gpus
 
 
+def detect_memory() -> dict[str, float | None]:
+    total_bytes: int | None = None
+    available_bytes: int | None = None
+    if sys.platform == "win32":
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("length", ctypes.c_ulong),
+                ("memory_load", ctypes.c_ulong),
+                ("total_physical", ctypes.c_ulonglong),
+                ("available_physical", ctypes.c_ulonglong),
+                ("total_page_file", ctypes.c_ulonglong),
+                ("available_page_file", ctypes.c_ulonglong),
+                ("total_virtual", ctypes.c_ulonglong),
+                ("available_virtual", ctypes.c_ulonglong),
+                ("available_extended_virtual", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatus()
+        status.length = ctypes.sizeof(MemoryStatus)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            total_bytes = int(status.total_physical)
+            available_bytes = int(status.available_physical)
+    elif hasattr(os, "sysconf"):
+        try:
+            page_size = int(os.sysconf("SC_PAGE_SIZE"))
+            total_bytes = page_size * int(os.sysconf("SC_PHYS_PAGES"))
+            available_bytes = page_size * int(os.sysconf("SC_AVPHYS_PAGES"))
+        except (OSError, TypeError, ValueError):
+            pass
+
+    return {
+        "total_gb": round(total_bytes / (1024**3), 2) if total_bytes else None,
+        "available_gb": (
+            round(available_bytes / (1024**3), 2) if available_bytes else None
+        ),
+    }
+
+
+def detect_cuda() -> dict[str, Any]:
+    driver_reported_version: str | None = None
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        code, output = _run([nvidia_smi])
+        if code == 0:
+            match = re.search(r"CUDA Version:\s*([0-9.]+)", output)
+            if match:
+                driver_reported_version = match.group(1)
+
+    nvcc_path = shutil.which("nvcc")
+    nvcc_version: str | None = None
+    if nvcc_path:
+        code, output = _run([nvcc_path, "--version"])
+        if code == 0:
+            nvcc_version = output
+    return {
+        "driver_reported_version": driver_reported_version,
+        "toolkit_available": nvcc_path is not None,
+        "nvcc_path": nvcc_path,
+        "nvcc_version": nvcc_version,
+    }
+
+
 def recommend_mode(gpus: list[dict[str, Any]]) -> str:
     max_vram = max((int(gpu.get("memory_mb", 0)) for gpu in gpus), default=0)
     if max_vram >= 24 * 1024:
@@ -88,6 +153,11 @@ def build_report() -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "repo_root": str(REPO_ROOT),
         "platform": platform.platform(),
+        "cpu": {
+            "name": platform.processor() or platform.machine() or "unknown",
+            "logical_cores": os.cpu_count(),
+        },
+        "ram": detect_memory(),
         "python": {
             "version": platform.python_version(),
             "executable": sys.executable,
@@ -103,6 +173,7 @@ def build_report() -> dict[str, Any]:
             "free_gb": round(disk.free / (1024**3), 2),
         },
         "nvidia_gpus": gpus,
+        "cuda": detect_cuda(),
         "recommended_mode": recommend_mode(gpus),
         "notes": [
             "No CUDA GPU is required for dataset/schema/bootstrap work.",

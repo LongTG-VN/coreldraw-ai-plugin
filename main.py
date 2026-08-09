@@ -16,6 +16,8 @@ from design_bridge import DesignBridge
 from extended_bridge import extended_bridge
 from template_engine import TemplateEngine, TemplateRegistry, TemplateRegistryError
 from template_models import MenuRenderRequest
+from training.inference.baseline import generate_baseline_design
+from training.inference.contract import DesignGenerateRequest, DesignGenerateResponse
 from transaction_engine import DesignTransactionEngine, DesignTransactionError
 
 app = FastAPI(
@@ -567,6 +569,27 @@ def design_transaction(req: DesignTransactionRequest) -> dict[str, object]:
         run_check=req.run_check,
         min_font_size=req.min_font_size,
         require_named_objects=req.require_named_objects,
+    )
+
+
+@app.post("/design/generate", response_model=DesignGenerateResponse)
+@app.post("/api/v1/design/generate", response_model=DesignGenerateResponse)
+def design_generate(req: DesignGenerateRequest) -> DesignGenerateResponse:
+    """Return the structured baseline contract; no trained model is implied."""
+
+    document = generate_baseline_design(
+        req.prompt,
+        req.width_mm,
+        req.height_mm,
+    )
+    return DesignGenerateResponse(
+        design=document,
+        assets=document.assets,
+        metadata={
+            "generator": document.metadata["generator"],
+            "trained_model": False,
+            "corel_transaction_endpoint": "/api/v1/design/transaction",
+        },
     )
 
 

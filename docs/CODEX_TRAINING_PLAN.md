@@ -318,3 +318,19 @@ Antigravity converts/validates this into the existing transaction endpoint and p
 8. Run a tiny training/eval if hardware permits; otherwise leave a verified command and test fixtures.
 9. Add fixed evaluation prompts and metrics.
 10. Only then consider 5k samples, LLM4SVG, or a visual reward model.
+
+## Verified bootstrap checkpoint — 2026-08-09
+
+- Hardware preflight records 20 logical CPU cores, 31.63GB RAM, RTX 3060 Laptop
+  6GB, driver-reported CUDA 13.1, no `nvcc`, and 52.26GB free disk.
+- GenPoster streaming probe succeeds for 20 rows without bulk download.
+- Unified design schema, GenPoster adapter, validation, deterministic splitting,
+  and license lineage are implemented.
+- A 100-record research-only smoke set validates with zero schema issues:
+  74 train / 8 validation / 18 test.
+- Elem2design layout format dry-run succeeds for all 100 records but is not
+  training-ready because staged render images are not yet available.
+- Deterministic baseline inference produces valid `design.json`, Corel
+  transaction operations, PNG preview, and machine-readable layout metrics.
+- No model training/checkpoint is claimed: the inspected 8B multimodal recipe
+  exceeds the local 6GB VRAM gate.

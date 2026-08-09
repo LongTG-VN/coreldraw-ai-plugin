@@ -40,7 +40,10 @@ def build_plan(profile: str, clone_upstreams: bool = False) -> dict[str, Any]:
     return {
         "profile": profile,
         "max_samples": int(profiles[profile]["max_samples"]),
-        "directories": [str(path.relative_to(REPO_ROOT)) for path in workspace_directories()],
+        "directories": [
+            path.relative_to(REPO_ROOT).as_posix()
+            for path in workspace_directories()
+        ],
         "clone_upstreams": clone_upstreams,
         "upstreams": registry.get("upstreams", {}) if clone_upstreams else {},
         "dataset_downloads": "none",
