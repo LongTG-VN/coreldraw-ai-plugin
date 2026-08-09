@@ -334,3 +334,20 @@ Antigravity converts/validates this into the existing transaction endpoint and p
   transaction operations, PNG preview, and machine-readable layout metrics.
 - No model training/checkpoint is claimed: the inspected 8B multimodal recipe
   exceeds the local 6GB VRAM gate.
+
+## Verified Design AI v0.1 checkpoint — 2026-08-09
+
+- Elem2Design remains intact as a research/reference integration.
+- `Qwen/Qwen3-1.7B` revision
+  `70d244cc86ccca08cf5af4e1e306ecf908b1ad5e` trains locally with NF4 QLoRA.
+- The measured 100-record SFT gate uses sequence length 1664 and retains all
+  74 train records without truncating JSON targets.
+- Five real optimizer steps completed at batch 1 / accumulation 4, peak PyTorch
+  VRAM 5.228 GiB, and final train loss 1.12279.
+- The saved adapter reloads in a separate process and produces a structured
+  layout that validates after explicit logged shorthand recovery, compiles to
+  Corel operations, renders, and receives deterministic layout metrics.
+- Raw output does not yet match the unified schema directly. Do not scale to
+  500 records until direct schema adherence improves.
+- The checkpoint remains research-only because its SFT data is derived from
+  GenPoster100K CC-BY-NC-4.0.

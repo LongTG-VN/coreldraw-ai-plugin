@@ -181,3 +181,14 @@ the request -> design.json -> Corel transaction -> preview/metrics contract:
 The run writes `config.json`, `environment.json`, `dataset.json`, `metrics.json`,
 the structured design, Corel operation payload, and a deterministic PNG preview.
 Generated run artifacts remain ignored by Git.
+
+## 13. Design AI v0.1 local Qwen3 planner
+
+The first real local trained checkpoint uses pinned `Qwen/Qwen3-1.7B` with
+NF4 QLoRA. It preserves Elem2Design as a separate research/reference pipeline.
+See `docs/QWEN3_LOCAL_PLANNER.md` for the exact dependency stack, commands,
+measured token lengths, training metrics, checkpoint reload, inference result,
+and the remaining raw-schema limitation.
+
+The GenPoster-derived adapter is always `research_only` and must not be shipped
+as a production/commercial checkpoint.
