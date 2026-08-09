@@ -1,107 +1,113 @@
-# PYTHON Rules
+# Codex Instructions — CorelDRAW Design AI
 
-# Python Developer Guidelines
+## Mission
 
-## Naming Conventions
-- Use `snake_case` for modules, functions, variables, and test names.
-- Use `PascalCase` for classes and exceptions.
-- Name predicates with a clear boolean meaning such as `is_ready`.
-- Follow PEP 8 naming conventions:
-- PascalCase for classes
+Bootstrap a trainable graphic-design AI while the private ~800 GB CorelDRAW archive is still being prepared. Build and validate the complete public/synthetic training pipeline now so the private dataset can be plugged in later without redesigning the system.
 
-## Project Structure
-- Keep importable code in a package and tests in a dedicated `tests/` tree.
-- Keep entry points thin and move reusable logic into focused modules.
-- Define dependencies and supported Python versions in project metadata.
-- Use src-layout with `src/your_package_name/`
-- Place tests in `tests/` directory parallel to `src/`
-- Keep configuration in `config/` or as environment variables
-- Store requirements in `requirements.txt` or `pyproject.toml`
-- Place static files in `static/` directory
-- Use `templates/` for Jinja2 templates
-- Use isort for import sorting
-- Import types from `typing` module
-- Use Flask factory pattern
-- Organize routes using Blueprints
-- Use Flask-SQLAlchemy for database
-- Implement proper error handlers
+Runtime target:
 
-## Best Practices
-- Prefer explicit data flow and small functions over hidden global state.
-- Catch only errors that can be handled meaningfully.
-- Add type hints at public boundaries and validate untrusted input.
-- Use context managers for files, locks, and network resources.
-- Test normal behavior, boundaries, failures, and cleanup.
-- Never place credentials in source code or committed configuration.
-- Follow Black code formatting
-- snake_case for functions and variables
-- UPPER_CASE for constants
-- Maximum line length of 88 characters (Black default)
-- Use absolute imports over relative imports
-- Use type hints for all function parameters and returns
-- Use `Optional[Type]` instead of `Type | None`
-- Use `TypeVar` for generic types
-- Define custom types in `types.py`
-- Use `Protocol` for duck typing
-- Use SQLAlchemy ORM
-- Implement database migrations with Alembic
-- Use proper connection pooling
-- Define models in separate modules
-- Implement proper relationships
-- Use proper indexing strategies
-- Use Flask-Login for session management
-- Implement Google OAuth using Flask-OAuth
-- Hash passwords with bcrypt
+`design model -> structured design plan / SVG -> Antigravity -> coreldraw-ai-plugin -> editable CDR`
 
+Read `docs/CODEX_TRAINING_PLAN.md` before changing training code. Read `training/README.md` before running training commands.
 
----
+## Repository rules
 
-# FASTAPI Rules
+- Python uses `snake_case`, type hints, small focused functions, and explicit error handling.
+- Keep Corel COM access serialized through the existing bridge architecture.
+- Do not rewrite the working Corel runtime merely to fit a training framework.
+- Never commit credentials, datasets, model weights, vendor repositories, generated previews, or checkpoints.
+- Do not create another git branch. Work on the branch the user checked out.
+- Preserve existing API behavior unless the task explicitly requires a breaking change.
 
-# Fastapi Developer Guidelines
+## Training/data hard rules
 
-## Naming Conventions
-- Use nouns for resources and explicit verbs only for non-resource actions.
-- Name request and response models by their API role.
-- Use `snake_case` for Python identifiers and stable operation IDs.
+1. Do not train a production/commercial checkpoint on data whose commercial rights are unclear or non-commercial.
+2. Keep namespaces separate:
+   - `training/data/research/`: public research-only or unclear-license data.
+   - `training/data/production/`: synthetic data we created, explicitly licensed data, and later the private company dataset.
+   - `training/artifacts/`: local checkpoints/adapters/eval outputs.
+   - `training/vendor/`: cloned upstream repositories.
+3. `GenPoster100K` is research-only in this project because its current dataset card is `CC-BY-NC-4.0`.
+4. `CGL-Dataset-v2` is research-only until commercial rights are explicitly verified; its current dataset card reports an unknown license.
+5. Prefer streaming/subsets. Do not download a full large dataset just because disk space exists.
+6. Record source, license class, and transform lineage in every normalized dataset sample/run manifest.
+7. Prefer LoRA/QLoRA for bootstrap experiments. Full fine-tuning requires an explicit reason and resource estimate.
 
-## Project Structure
-- Keep route handlers thin and move domain logic into services.
-- Separate API schemas from persistence models.
-- Centralize dependencies for authentication, authorization, and transactions.
-- Use proper directory structure
-- Implement proper module organization
-- Use proper dependency injection
-- Keep routes organized by domain
-- Implement proper middleware
-- Use proper configuration management
-- ONLY layer allowed to import sqlalchemy
-- ONLY layer allowed to import httpx directly
-- from app.models.user import User inside a service → return domain types from repo
+## First-run procedure
 
-## Best Practices
-- Validate all external input with explicit schemas.
-- Return stable error shapes without leaking internal exceptions.
-- Bound request sizes, timeouts, and downstream retries.
-- Use lifespan hooks for shared clients and cleanup.
-- Test authorization and failure behavior as well as happy paths.
-- Keep blocking work out of asynchronous handlers.
-- Use proper HTTP methods
-- Implement proper status codes
-- Use proper request/response models
-- Implement proper validation
-- Use proper error handling
-- Document APIs with OpenAPI
-- Use Pydantic models
-- Use proper type hints
-- Keep models organized
-- Use proper inheritance
-- Implement proper serialization
-- Use proper ORM (SQLAlchemy)
-- Implement proper migrations
-- Use proper connection pooling
-- Implement proper transactions
-- Use proper query optimization
-- Handle database errors properly
-- Implement proper JWT authentication
-- Use proper password hashing
+Run in this order:
+
+```bash
+python training/tools/preflight.py --write-report
+python training/tools/bootstrap.py --profile smoke --apply
+```
+
+Create/activate a dedicated training environment using `training/README.md`, then install `training/requirements.txt`.
+
+After dependencies are available:
+
+```bash
+python training/tools/probe_dataset.py --source genposter100k --limit 20
+python -m compileall -q .
+pytest -q
+```
+
+If CUDA is unavailable, continue building and validating preprocessing, schemas, tests, dataset adapters, evaluation, and inference contracts. Missing CUDA is not a repository failure.
+
+## Scale gates
+
+Do not skip gates unless the user explicitly requests it.
+
+- `smoke`: <= 500 samples. Prove ingestion, normalized schema, train command, and eval loop.
+- `prototype`: <= 5,000 samples. Produce the first layout LoRA and compare it against a baseline.
+- `research`: <= 25,000 public samples by default. Improve architecture/evaluation only.
+- `production`: synthetic + verified-commercial + private company data only.
+
+Move to the next gate only when the current gate has:
+
+- reproducible command/config;
+- no schema errors;
+- saved metrics;
+- qualitative samples;
+- safe disk/GPU budget;
+- no unresolved license blocker.
+
+## Model priority
+
+1. `microsoft/elem2design` / LaDeCo ideas for layered composition and layout planning.
+2. `ximinng/LLM4SVG` for editable SVG/vector generation.
+3. `MeiGen-AI/PosterReward` as an optional research critic after a generator works.
+4. Synthetic preference data generated by our own pipeline.
+5. Private CorelDRAW data when available.
+
+Inspect current upstream requirements before choosing CUDA/PyTorch/base-model versions. Do not assume old dependency pins are still correct.
+
+## Expected architecture
+
+Public/private adapters must converge on one normalized representation:
+
+`source asset -> adapter -> design.json -> trainer -> adapter/checkpoint -> inference -> Antigravity transaction -> CorelDRAW`
+
+The normalized representation should preserve at minimum page dimensions, element type, normalized bbox, z-order when known, text/typography when known, color, asset reference, source id, source license class, and category/style metadata when available.
+
+## Validation
+
+After repository changes run:
+
+```bash
+python -m compileall -q .
+pytest -q
+```
+
+For training changes, also run the smallest relevant smoke test before scaling. Never claim a heavy training run succeeded unless its actual logs/checkpoint/metrics exist.
+
+## Bootstrap definition of done
+
+A fresh checkout can:
+
+1. run preflight;
+2. prepare the local training workspace;
+3. probe a public dataset without bulk downloading it;
+4. run all repository tests;
+5. produce a documented command/config for the first <=500-sample layout experiment;
+6. keep research-only data technically separated from production-safe data.
