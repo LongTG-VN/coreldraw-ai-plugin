@@ -8,7 +8,7 @@ import math
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from pydantic import BaseModel, ConfigDict, Field
@@ -184,10 +184,14 @@ class BestOfNSelector:
         generator: CandidateGenerator,
         scorer: DesignScorer,
         model_provenance: dict[str, Any],
+        document_postprocessor: (
+            Callable[[DesignDocument], tuple[DesignDocument, dict[str, Any]]] | None
+        ) = None,
     ) -> None:
         self.generator = generator
         self.scorer = scorer
         self.model_provenance = model_provenance
+        self.document_postprocessor = document_postprocessor
 
     def run(
         self,
@@ -308,7 +312,19 @@ class BestOfNSelector:
             try:
                 planner_payload = extract_planner_payload(generation.raw_output)
                 _write_json(candidate_dir / "planner.json", planner_payload)
-                document, validation = parse_design_output(generation.raw_output)
+                document, validation = parse_design_output(
+                    generation.raw_output,
+                    canvas_width=width_mm,
+                    canvas_height=height_mm,
+                )
+                if self.document_postprocessor is not None:
+                    document, postprocess = self.document_postprocessor(document)
+                    _write_json(candidate_dir / "postprocess.json", postprocess)
+                    validation = {
+                        **validation,
+                        "document_postprocessed": True,
+                        "postprocessor": postprocess.get("engine", "unknown"),
+                    }
                 document.metadata.update(
                     {
                         "trained_model": True,

@@ -68,6 +68,15 @@ def _finite_number(value: Any, fallback: float) -> float:
     return number if math.isfinite(number) else fallback
 
 
+def _font_weight(value: Any) -> int | str | None:
+    if isinstance(value, int):
+        return value if 1 <= value <= 1000 else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return None
+
+
 def _color(value: Any) -> ColorSpec:
     text = str(value or "black").strip()
     resolved = _NAMED_COLORS.get(text.casefold(), text)
@@ -79,7 +88,12 @@ def _color(value: Any) -> ColorSpec:
         return ColorSpec(model="hex", values=["#000000"])
 
 
-def _recover_shorthand(payload: Any, raw_output: str) -> DesignDocument:
+def _recover_shorthand(
+    payload: Any,
+    raw_output: str,
+    *,
+    fallback_canvas: tuple[float, float] | None = None,
+) -> DesignDocument:
     """Normalize the observed Qwen shorthand without trusting remote assets."""
 
     if not isinstance(payload, dict):
@@ -104,6 +118,8 @@ def _recover_shorthand(payload: Any, raw_output: str) -> DesignDocument:
             "width": recovered_payload["width"],
             "height": recovered_payload["height"],
         }
+    if not isinstance(raw_canvas, dict) and fallback_canvas is not None:
+        raw_canvas = {"width": fallback_canvas[0], "height": fallback_canvas[1]}
     raw_elements = recovered_payload.get("elements")
     if isinstance(raw_elements, dict):
         normalized_elements = []
@@ -111,6 +127,8 @@ def _recover_shorthand(payload: Any, raw_output: str) -> DesignDocument:
             if not isinstance(value, dict):
                 continue
             normalized = {**value, "name": value.get("name", name)}
+            if "text" not in normalized and isinstance(normalized.get("STRING"), str):
+                normalized["text"] = normalized["STRING"]
             normalized.setdefault(
                 "type",
                 "text" if "text" in normalized else "rectangle",
@@ -179,7 +197,7 @@ def _recover_shorthand(payload: Any, raw_output: str) -> DesignDocument:
             )
             element = DesignElement(
                 id=identifier,
-                name=f"Text {index}",
+                name=str(raw_element.get("name") or f"Text {index}")[:300],
                 type="text",
                 bbox=bbox,
                 bbox_norm=normalize_bbox(bbox, canvas),
@@ -194,9 +212,23 @@ def _recover_shorthand(payload: Any, raw_output: str) -> DesignDocument:
                         or "Arial"
                     ),
                     font_size=font_size,
-                    alignment="left",
+                    font_weight=_font_weight(raw_element.get("font_weight")),
+                    alignment=(
+                        raw_element.get("alignment")
+                        if raw_element.get("alignment")
+                        in {"left", "center", "right", "justify"}
+                        else "left"
+                    ),
+                    line_height=(
+                        _finite_positive(raw_element.get("line_height"), font_size * 1.15)
+                        if raw_element.get("line_height") is not None
+                        else None
+                    ),
                 ),
                 visual=VisualSpec(fill=fill),
+                metadata={
+                    "role": str(raw_element.get("role") or "body")[:100],
+                },
             )
         else:
             remote_source = str(
@@ -285,7 +317,12 @@ def planner_messages(
     ]
 
 
-def parse_design_output(raw_output: str) -> tuple[DesignDocument, dict[str, Any]]:
+def parse_design_output(
+    raw_output: str,
+    *,
+    canvas_width: float | None = None,
+    canvas_height: float | None = None,
+) -> tuple[DesignDocument, dict[str, Any]]:
     """Strictly validate unified JSON or explicitly normalize known shorthand."""
 
     text = raw_output.strip()
@@ -329,7 +366,16 @@ def parse_design_output(raw_output: str) -> tuple[DesignDocument, dict[str, Any]
         raw_schema_valid = True
     except Exception:
         try:
-            document = _recover_shorthand(payload, raw_output)
+            fallback_canvas = (
+                (float(canvas_width), float(canvas_height))
+                if canvas_width is not None and canvas_height is not None
+                else None
+            )
+            document = _recover_shorthand(
+                payload,
+                raw_output,
+                fallback_canvas=fallback_canvas,
+            )
         except ModelOutputError:
             raise
         except Exception as exc:
@@ -596,7 +642,11 @@ def generate_with_checkpoint(
         do_sample=False,
     )
     raw_output = generation.raw_output
-    document, parse_metadata = parse_design_output(raw_output)
+    document, parse_metadata = parse_design_output(
+        raw_output,
+        canvas_width=width_mm,
+        canvas_height=height_mm,
+    )
     document.metadata.update(
         {
             "trained_model": True,

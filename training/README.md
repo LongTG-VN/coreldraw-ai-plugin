@@ -213,3 +213,24 @@ overlap reduction from 0.200695 to 0.041277, and text-fit improvement from
 0.397436 to 0.498077. This is a research-only heuristic benchmark, not a claim
 of professional visual quality. Representative manual findings are documented
 in `docs/DESIGN_AI_V0_2_HUMAN_REVIEW.md`.
+
+## 15. Design AI v0.3 reference-grounded RAG
+
+V0.3 keeps the same Qwen3-1.7B NF4 checkpoint and v0.2 best-of-four selector.
+It retrieves five explainable, diverse local structural references, sends only
+a compact copyright-safe summary to the planner, fits typography with local
+glyph measurement, and then runs the unchanged schema/Corel/render/ranking
+contract. The bounded mixed corpus contains 165 records and remains
+`research_only`, `commercial_allowed: false` because 100 records derive from
+GenPoster CC-BY-NC-4.0.
+
+The benchmark replays and reranks all stored v0.2 candidates with the same v0.3
+scorer before comparing them with new RAG candidates. Manual side-by-side
+templates remain explicitly pending until a human provides scores. See
+`docs/DESIGN_AI_V0_3_REFERENCE_RAG.md` for commands and artifact contracts.
+
+The verified 13-prompt v0.3 run improves the fair same-scorer best-of-four
+average from 0.744975 to 0.828604 (+11.225728%), with 52/52 valid RAG
+candidates, zero winner overlap/outside-canvas rate, hierarchy 0.689965 versus
+0.663317, and glyph-measured text fit 0.942308 versus 0.456410. These are
+offline heuristic metrics; human preference remains pending.

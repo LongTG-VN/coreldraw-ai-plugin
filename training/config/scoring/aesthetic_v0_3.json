@@ -1,0 +1,16 @@
+{
+  "scale": "0..1",
+  "critic_version": "0.3.0",
+  "comparison_policy": "rescore both v0.2 and v0.3 candidates with the same critic",
+  "weights": {
+    "technical": 0.25,
+    "composition": 0.15,
+    "visual_hierarchy": 0.15,
+    "typography": 0.10,
+    "spacing": 0.10,
+    "color_harmony": 0.08,
+    "balance": 0.05,
+    "readability": 0.10,
+    "prompt_match": 0.02
+  }
+}

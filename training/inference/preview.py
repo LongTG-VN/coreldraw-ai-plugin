@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import textwrap
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from training.schemas.design import ColorSpec, DesignDocument
+from training.typography.fitting import load_font, measure_text
 
 
 def _rgb(color: ColorSpec | None, default: tuple[int, int, int]) -> tuple[int, int, int]:
@@ -28,18 +28,6 @@ def _rgb(color: ColorSpec | None, default: tuple[int, int, int]) -> tuple[int, i
         int(round(255 * (1 - magenta) * (1 - black))),
         int(round(255 * (1 - yellow) * (1 - black))),
     )
-
-
-def _font(size: int, family: str | None) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = [family, "arial.ttf", "DejaVuSans.ttf"]
-    for candidate in candidates:
-        if not candidate:
-            continue
-        try:
-            return ImageFont.truetype(candidate, size=max(8, size))
-        except OSError:
-            continue
-    return ImageFont.load_default()
 
 
 def render_preview(
@@ -74,15 +62,26 @@ def render_preview(
             draw.ellipse((left, top, right, bottom), fill=fill, outline=stroke, width=stroke_width)
         elif element.type == "text" and element.text is not None:
             font_size = int(round(float(element.text.font_size or 24) * scale))
-            font = _font(font_size, element.text.font_family)
-            max_chars = max(8, int((right - left) / max(font_size * 0.55, 1)))
-            wrapped = "\n".join(textwrap.wrap(element.text.content, max_chars))
+            font = load_font(font_size, element.text.font_family)
+            measured = measure_text(
+                element.text.content,
+                box_width=max(1, right - left),
+                font_size=font_size,
+                family=element.text.font_family,
+                line_height=(
+                    float(element.text.line_height) * scale
+                    if element.text.line_height is not None
+                    and float(element.text.line_height) > 3
+                    else element.text.line_height
+                ),
+            )
+            wrapped = "\n".join(measured.lines)
             draw.multiline_text(
                 (left, top),
                 wrapped,
                 fill=fill,
                 font=font,
-                spacing=max(2, int(font_size * 0.15)),
+                spacing=max(0, int(measured.line_height - font_size)),
                 align=element.text.alignment or "left",
             )
         elif element.type in {"image", "svg", "other"}:

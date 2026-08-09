@@ -95,7 +95,7 @@ class TechnicalCritic:
     """Deterministic eligibility gate plus print/layout-oriented penalties."""
 
     critic_name = "deterministic_technical_critic"
-    critic_version = "0.2.3"
+    critic_version = "0.3.0"
 
     def score(
         self,
@@ -345,7 +345,7 @@ class HeuristicAestheticCritic(AestheticCritic):
     """Offline fallback based only on validated structure and preview metadata."""
 
     critic_name = "heuristic_aesthetic_critic"
-    critic_version = "0.2.3"
+    critic_version = "0.3.0"
     model_based = False
 
     def score(
@@ -366,12 +366,31 @@ class HeuristicAestheticCritic(AestheticCritic):
         tiny_text = _clamp(float(metrics.get("tiny_text_rate", 0)))
         text_fit = _clamp(float(metrics.get("text_fit_rate", 1)))
         hierarchy_ratio = max(float(metrics.get("text_hierarchy_ratio", 1)), 1e-6)
+        headline_dominance = _clamp(float(metrics.get("headline_dominance", 0)))
+        cta_emphasis = _clamp(float(metrics.get("cta_emphasis", 0.5)))
+        price_emphasis = _clamp(float(metrics.get("price_emphasis", 0.5)))
+        focal_point = _clamp(float(metrics.get("focal_point_score", 0)))
+        section_hierarchy = _clamp(
+            float(metrics.get("section_hierarchy_score", 0))
+        )
+        equal_size_rate = _clamp(float(metrics.get("equal_size_text_rate", 1)))
 
         coverage_fit = _clamp(1 - abs(coverage - 0.42) / 0.42)
         composition = _clamp(
             0.45 * coverage_fit + 0.35 * (1 - overlap) + 0.20 * alignment
         )
-        hierarchy = _clamp(1 - abs(math.log(hierarchy_ratio / 2.4)) / 1.5)
+        legacy_ratio_fit = _clamp(
+            1 - abs(math.log(hierarchy_ratio / 2.4)) / 1.5
+        )
+        hierarchy = _clamp(
+            0.32 * headline_dominance
+            + 0.16 * legacy_ratio_fit
+            + 0.13 * cta_emphasis
+            + 0.09 * price_emphasis
+            + 0.12 * focal_point
+            + 0.13 * section_hierarchy
+            + 0.05 * (1 - equal_size_rate)
+        )
         typography = _clamp(
             0.35 * (1 - tiny_text) + 0.35 * hierarchy + 0.30 * text_fit
         )

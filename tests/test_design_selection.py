@@ -382,10 +382,10 @@ def test_technical_overlap_penalty_does_not_saturate_early() -> None:
 
 
 def test_text_box_overflow_is_measured_and_penalized() -> None:
-    fitting = generate_baseline_design("Poster", 100, 50)
+    fitting = generate_baseline_design("Poster", 1000, 500)
     overflow_payload = fitting.model_dump()
     text_element = overflow_payload["elements"][1]
-    text_element["bbox"] = {"x": 10, "y": 5, "width": 20, "height": 3}
+    text_element["bbox"] = {"x": 100, "y": 50, "width": 200, "height": 30}
     text_element["bbox_norm"] = {
         "x": 0.1,
         "y": 0.1,
@@ -468,7 +468,7 @@ def test_scorer_provenance_comes_from_configured_critic() -> None:
     provenance = DesignScorer(weights=WEIGHTS, aesthetic_critic=critic).provenance()
 
     assert provenance == {
-        "technical": "deterministic_technical_critic:0.2.3",
+        "technical": "deterministic_technical_critic:0.3.0",
         "aesthetic": "fixture_critic:9.1",
         "vision_model_used": True,
     }

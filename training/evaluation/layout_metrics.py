@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import textwrap
 from itertools import combinations
 
+from training.evaluation.hierarchy import evaluate_hierarchy
+from training.typography.fitting import measure_text
 from training.schemas.design import BoundingBox, DesignDocument, DesignElement
 
 
@@ -84,14 +85,14 @@ def evaluate_layout(document: DesignDocument) -> dict[str, float | int]:
         font_size = float(element.text.font_size or 24)
         box_width = float(element.bbox.width)
         box_height = float(element.bbox.height)
-        max_chars = max(8, int(box_width / max(font_size * 0.55, 1)))
-        lines = textwrap.wrap(element.text.content, max_chars) or [""]
-        line_height = float(element.text.line_height or font_size)
-        required_height = (
-            len(lines) * line_height
-            + max(0, len(lines) - 1) * font_size * 0.15
+        measured = measure_text(
+            element.text.content,
+            box_width=box_width,
+            font_size=font_size,
+            family=element.text.font_family,
+            line_height=element.text.line_height,
         )
-        overflow = max(0.0, required_height - box_height) / max(box_height, 1e-6)
+        overflow = max(0.0, measured.height - box_height) / max(box_height, 1e-6)
         text_overflow_amounts.append(min(overflow, 1.0))
     signatures = [
         (
@@ -159,4 +160,5 @@ def evaluate_layout(document: DesignDocument) -> dict[str, float | int]:
             else 0.0
         ),
         "excessive_element_count": max(0, len(content_elements) - 16),
+        **evaluate_hierarchy(document),
     }

@@ -13,6 +13,10 @@ from training.inference.candidates import (
     BestOfNSelector,
     CandidateGenerationSettings,
 )
+from training.inference.rag import (
+    ReferenceGroundedDesignPipeline,
+    ReferenceGroundedGenerator,
+)
 
 __all__ = [
     "CorelCompileError",
@@ -25,4 +29,6 @@ __all__ = [
     "Qwen3PlannerSession",
     "BestOfNSelector",
     "CandidateGenerationSettings",
+    "ReferenceGroundedDesignPipeline",
+    "ReferenceGroundedGenerator",
 ]

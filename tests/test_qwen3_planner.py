@@ -94,6 +94,33 @@ def test_parse_design_output_rejects_invalid_schema() -> None:
         parse_design_output('{"schema_version":"0.1"}')
 
 
+def test_parse_compact_element_map_uses_request_canvas_fallback() -> None:
+    raw = json.dumps(
+        {
+            "elements": {
+                "headline": {
+                    "STRING": "LUNA NAIL",
+                    "role": "headline",
+                    "bbox": {"x": 10, "y": 15, "width": 80, "height": 20},
+                    "font_size": 24,
+                    "alignment": "center",
+                }
+            }
+        }
+    )
+
+    document, metadata = parse_design_output(
+        raw,
+        canvas_width=108,
+        canvas_height=135,
+    )
+
+    assert document.canvas.width == 108
+    assert document.canvas.height == 135
+    assert document.elements[1].text.content == "LUNA NAIL"
+    assert metadata["raw_schema_valid"] is False
+
+
 def test_parse_design_output_recovers_observed_shorthand_explicitly() -> None:
     raw = json.dumps(
         {

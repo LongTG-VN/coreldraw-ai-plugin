@@ -8,6 +8,7 @@ from training.evaluation.critics import (
 )
 from training.evaluation.diversity import candidate_diversity, layout_distance
 from training.evaluation.layout_metrics import evaluate_layout
+from training.evaluation.manual_review import write_manual_review_artifacts
 from training.evaluation.scoring import (
     AllCandidatesInvalidError,
     DesignScorer,
@@ -27,4 +28,5 @@ __all__ = [
     "evaluate_layout",
     "layout_distance",
     "rank_candidate_scores",
+    "write_manual_review_artifacts",
 ]

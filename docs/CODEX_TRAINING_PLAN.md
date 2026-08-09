@@ -372,3 +372,38 @@ Antigravity converts/validates this into the existing transaction endpoint and p
   target is not a production-quality claim.
 - The next justified milestone is v0.3 design retrieval/reference grounding,
   not 5K training or a full reward-model phase.
+
+## Design AI v0.3 implementation — 2026-08-09
+
+- Preserve the Qwen3-1.7B NF4 `checkpoint-5`; v0.3 performs no retraining.
+- Build a 165-record local structural corpus with explicit per-record
+  provenance and most-restrictive mixed-corpus licensing.
+- Analyze briefs deterministically and retrieve Top-5 references using weighted
+  metadata similarity plus MMR-like structural diversity.
+- Ground the existing planner with compact, token-bounded summaries that omit
+  source copy, brands, logos, assets, and exact coordinates.
+- Keep v0.2 best-of-four, schema validation, Corel compilation, preview, and
+  artifact contracts; add deterministic measured typography fitting.
+- Evaluate the 13-prompt benchmark by rescoring/reranking v0.2 and v0.3 with
+  the same v0.3 critic, then prepare explicit pending manual comparisons.
+- Do not begin v0.4 preference training until the exact v0.3 gates and human
+  review artifacts are reported.
+
+## Verified Design AI v0.3 checkpoint — 2026-08-09
+
+- The same trained Qwen3-1.7B revision and NF4 LoRA `checkpoint-5` are reused;
+  no v0.3 retraining or model upgrade occurred.
+- The bounded corpus contains 165 local structural references and remains
+  `research_only: true`, `commercial_allowed: false` due to 100 GenPoster
+  CC-BY-NC-4.0-derived records.
+- The retrieval benchmark reports 100% category/format match, 0.749866 mean
+  relevance, and 0.467508 diversity for Top-5 weighted/MMR retrieval.
+- Under the same v0.3 scorer, prompts, four seeds, and checkpoint, RAG
+  best-of-four improves 0.744975 to 0.828604 (+11.225728%). Schema validity is
+  100%; winner overlap and outside-canvas rates are zero; hierarchy improves
+  0.663317 to 0.689965 and text fit improves 0.456410 to 0.942308.
+- The dense ten-item menu has ten aligned prices, zero overflow, 1.0 text fit,
+  and hierarchy 0.770940. Its combined heuristic score does not beat v0.2, so
+  the limitation remains explicit for human review.
+- Thirteen visual comparisons and empty human-review templates exist. No human
+  score, VLM score, or production/commercial readiness is claimed.
