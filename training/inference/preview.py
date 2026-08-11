@@ -35,10 +35,12 @@ def render_preview(
     output_path: Path,
     *,
     max_dimension: int = 1600,
+    allow_upscale: bool = False,
 ) -> Path:
     width = float(document.canvas.width)
     height = float(document.canvas.height)
-    scale = min(max_dimension / max(width, height), 1.0)
+    requested_scale = max_dimension / max(width, height)
+    scale = requested_scale if allow_upscale else min(requested_scale, 1.0)
     pixel_width = max(1, int(round(width * scale)))
     pixel_height = max(1, int(round(height * scale)))
     image = Image.new("RGB", (pixel_width, pixel_height), "white")
@@ -53,16 +55,58 @@ def render_preview(
         right = int(round(float(bbox.x + bbox.width) * pixel_width))
         bottom = int(round(float(bbox.y + bbox.height) * pixel_height))
         fill = _rgb(element.visual.fill, (230, 230, 230))
-        stroke = _rgb(element.visual.stroke, (80, 80, 80))
-        stroke_width = max(1, int(round(float(element.visual.stroke_width or 0))))
+        stroke = (
+            _rgb(element.visual.stroke, (80, 80, 80))
+            if element.visual.stroke is not None
+            else None
+        )
+        stroke_width = (
+            max(1, int(round(float(element.visual.stroke_width or 0) * scale)))
+            if stroke is not None
+            else 0
+        )
 
         if element.type == "rectangle":
             draw.rectangle((left, top, right, bottom), fill=fill, outline=stroke, width=stroke_width)
-            if element.metadata.get("editable_placeholder") or element.metadata.get("placeholder"):
+            is_placeholder = bool(
+                element.metadata.get("editable_placeholder")
+                or element.metadata.get("placeholder")
+            )
+            if is_placeholder and element.metadata.get("placeholder_presentation") == "soft_frame_v1":
+                # A presentation-safe missing-asset frame: visibly a placeholder,
+                # but deliberately quieter than the legacy full-frame debug X.
+                placeholder_stroke = stroke or (110, 110, 110)
+                diagonal = tuple(
+                    int(round(channel * .65 + 255 * .35)) for channel in placeholder_stroke
+                )
+                inset_x = max(4, int((right - left) * .16))
+                inset_y = max(4, int((bottom - top) * .18))
+                icon_left = left + inset_x
+                icon_top = top + inset_y
+                icon_right = min(right - inset_x, icon_left + max(12, (right - left) // 4))
+                icon_bottom = min(bottom - inset_y, icon_top + max(10, (bottom - top) // 6))
+                draw.rounded_rectangle(
+                    (icon_left, icon_top, icon_right, icon_bottom),
+                    radius=max(2, stroke_width * 2),
+                    outline=diagonal,
+                    width=max(1, stroke_width),
+                )
+                draw.line(
+                    (icon_left, icon_bottom, (icon_left + icon_right) // 2, icon_top, icon_right, icon_bottom),
+                    fill=diagonal,
+                    width=max(1, stroke_width),
+                )
+                draw.line(
+                    (left + inset_x, bottom - inset_y, right - inset_x, top + inset_y),
+                    fill=diagonal,
+                    width=max(1, stroke_width // 2),
+                )
+            elif is_placeholder:
                 # Keep missing visual intent obvious in review artifacts without
                 # introducing a fake logo/product asset into the document.
-                draw.line((left, top, right, bottom), fill=stroke, width=max(1, stroke_width))
-                draw.line((right, top, left, bottom), fill=stroke, width=max(1, stroke_width))
+                placeholder_stroke = stroke or (80, 80, 80)
+                draw.line((left, top, right, bottom), fill=placeholder_stroke, width=max(1, stroke_width))
+                draw.line((right, top, left, bottom), fill=placeholder_stroke, width=max(1, stroke_width))
         elif element.type == "ellipse":
             draw.ellipse((left, top, right, bottom), fill=fill, outline=stroke, width=stroke_width)
         elif element.type == "text" and element.text is not None:
@@ -90,9 +134,10 @@ def render_preview(
                 align=element.text.alignment or "left",
             )
         elif element.type in {"image", "svg", "other"}:
-            draw.rectangle((left, top, right, bottom), fill=fill, outline=stroke, width=2)
-            draw.line((left, top, right, bottom), fill=stroke, width=1)
-            draw.line((right, top, left, bottom), fill=stroke, width=1)
+            placeholder_stroke = stroke or (80, 80, 80)
+            draw.rectangle((left, top, right, bottom), fill=fill, outline=placeholder_stroke, width=2)
+            draw.line((left, top, right, bottom), fill=placeholder_stroke, width=1)
+            draw.line((right, top, left, bottom), fill=placeholder_stroke, width=1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path, format="PNG", optimize=True)
