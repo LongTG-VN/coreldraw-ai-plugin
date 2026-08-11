@@ -151,7 +151,10 @@ def _recover_brief_text_elements(
 
 
 def _synthesize_requested_menu_items(
-    document: DesignDocument, brief: StructuredBriefV1
+    document: DesignDocument,
+    brief: StructuredBriefV1,
+    *,
+    benchmark_mode: bool,
 ) -> int:
     requested = next(
         (
@@ -209,7 +212,7 @@ def _synthesize_requested_menu_items(
                     z_index=next_z,
                     layer="content",
                     text=TextSpec(
-                        content=f"Món {index:02d}\nMô tả ngắn",
+                        content=f"[ITEM_{index:02d}]\n[DESCRIPTION_{index:02d}]",
                         font_family="Arial",
                         font_size=11,
                     ),
@@ -219,6 +222,14 @@ def _synthesize_requested_menu_items(
                     metadata={
                         "role": "menu_item",
                         "synthetic_brief_completion": True,
+                        "placeholder_only": True,
+                        "requires_user_data": True,
+                        "content_provenance": (
+                            "benchmark_placeholder"
+                            if benchmark_mode
+                            else "system_placeholder"
+                        ),
+                        "benchmark_placeholder": benchmark_mode,
                     },
                 )
             )
@@ -235,7 +246,7 @@ def _synthesize_requested_menu_items(
                     z_index=next_z,
                     layer="content",
                     text=TextSpec(
-                        content=f"{39 + (index - 1) * 5}K",
+                        content=f"[PRICE_{index:02d}]",
                         font_family="Arial",
                         font_size=11,
                         alignment="right",
@@ -246,6 +257,14 @@ def _synthesize_requested_menu_items(
                     metadata={
                         "role": "price",
                         "synthetic_brief_completion": True,
+                        "placeholder_only": True,
+                        "requires_user_data": True,
+                        "content_provenance": (
+                            "benchmark_placeholder"
+                            if benchmark_mode
+                            else "system_placeholder"
+                        ),
+                        "benchmark_placeholder": benchmark_mode,
                     },
                 )
             )
@@ -280,6 +299,7 @@ def apply_reference_layout_guidance(
     *,
     brief: StructuredBriefV1,
     context: ReferenceContextV1,
+    benchmark_mode: bool = False,
 ) -> tuple[DesignDocument, dict[str, object]]:
     """Synthesize non-overlapping role regions from reference abstractions.
 
@@ -297,6 +317,14 @@ def apply_reference_layout_guidance(
         and bool(element.metadata["asset_intent"].get("placeholder"))
         for element in output.elements
     )
+    visual_asset_roles = {
+        "hero",
+        "product",
+        "logo",
+        "icon",
+        "illustration",
+        "background_image",
+    }
     output.elements = [
         element
         for element in output.elements
@@ -304,10 +332,22 @@ def apply_reference_layout_guidance(
             element.type == "rectangle"
             and isinstance(element.metadata.get("asset_intent"), dict)
             and bool(element.metadata["asset_intent"].get("placeholder"))
+            and str(element.metadata["asset_intent"].get("role") or "").casefold()
+            not in visual_asset_roles
         )
     ]
-    placeholder_drop_count = placeholder_count_before
-    menu_element_synthesis_count = _synthesize_requested_menu_items(output, brief)
+    placeholder_count_after = sum(
+        element.type == "rectangle"
+        and isinstance(element.metadata.get("asset_intent"), dict)
+        and bool(element.metadata["asset_intent"].get("placeholder"))
+        for element in output.elements
+    )
+    placeholder_drop_count = placeholder_count_before - placeholder_count_after
+    menu_element_synthesis_count = _synthesize_requested_menu_items(
+        output,
+        brief,
+        benchmark_mode=benchmark_mode,
+    )
     before = evaluate_layout(output)
     reference = context.references[_content_key(output) % len(context.references)]
     margin = _clamp(float(reference.spacing.outer_margin), 0.045, 0.085)
@@ -452,11 +492,22 @@ def apply_reference_layout_guidance(
         ):
             _set_norm_box(output, index, box)
     else:
-        headline_width = 1 - 2 * margin if centered else 0.62
-        _set_norm_box(output, headline[0], (margin, margin, headline_width, 0.15))
+        hero_left = reference.hero is not None and "left" in reference.hero.region
+        has_visual_column = bool(shape_indices)
+        headline_x = 0.42 if has_visual_column and hero_left else margin
+        headline_width = (
+            0.52
+            if has_visual_column
+            else (1 - 2 * margin if centered else 0.62)
+        )
+        _set_norm_box(output, headline[0], (headline_x, margin, headline_width, 0.15))
         content = subtitles + bodies + menu_items + prices
-        content_x = margin if not centered else 0.12
-        content_width = 0.54 if not centered else 0.76
+        content_x = (
+            0.42
+            if has_visual_column and hero_left
+            else (margin if has_visual_column or not centered else 0.12)
+        )
+        content_width = 0.52 if has_visual_column else (0.54 if not centered else 0.76)
         for index, box in zip(
             content,
             _stack_boxes(
@@ -476,7 +527,6 @@ def apply_reference_layout_guidance(
             ),
         ):
             _set_norm_box(output, index, box)
-        hero_left = reference.hero is not None and "left" in reference.hero.region
         hero_box = (margin, 0.30, 0.33, 0.45) if hero_left else (0.63, 0.24, 0.31, 0.52)
         for offset, index in enumerate(shape_indices):
             x, y, width, height = hero_box
@@ -502,7 +552,9 @@ def apply_reference_layout_guidance(
         "after_coverage": after["coverage"],
         "brief_text_recovery_count": brief_text_recovery_count,
         "unresolved_placeholder_drop_count": placeholder_drop_count,
+        "preserved_visual_asset_placeholder_count": placeholder_count_after,
         "synthetic_menu_element_count": menu_element_synthesis_count,
+        "business_placeholder_mode": "benchmark" if benchmark_mode else "system",
     }
 
 

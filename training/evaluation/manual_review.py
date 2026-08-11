@@ -97,10 +97,16 @@ def _references(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return normalized
 
 
-def _render_side_by_side(v02_path: Path, v03_path: Path, output_path: Path) -> None:
+def _render_side_by_side(
+    left_path: Path,
+    right_path: Path,
+    output_path: Path,
+    *,
+    labels: tuple[str, str] = ("V0.2", "V0.3 RAG"),
+) -> None:
     previews: list[Image.Image] = []
     try:
-        for path in (v02_path, v03_path):
+        for path in (left_path, right_path):
             with Image.open(path) as source:
                 image = source.convert("RGB")
                 image.thumbnail((720, 720), Image.Resampling.LANCZOS)
@@ -115,7 +121,7 @@ def _render_side_by_side(v02_path: Path, v03_path: Path, output_path: Path) -> N
             "white",
         )
         draw = ImageDraw.Draw(canvas)
-        for index, (label, image) in enumerate(zip(("V0.2", "V0.3 RAG"), previews)):
+        for index, (label, image) in enumerate(zip(labels, previews)):
             panel_x = padding + index * (panel_width + padding)
             image_x = panel_x + (panel_width - image.width) // 2
             image_y = padding + label_height + (panel_height - image.height) // 2
@@ -144,11 +150,23 @@ def write_manual_review_artifacts(
     v03_metrics: Mapping[str, Any],
     retrieved_references: Sequence[Mapping[str, Any]],
     output_dir: str | Path,
+    left_key: str = "v0.2",
+    right_key: str = "v0.3",
+    left_label: str = "Design AI v0.2 best-of-4 winner",
+    right_label: str = "Design AI v0.3 RAG best-of-4 winner",
+    artifact_type: str = "v0.2_vs_v0.3_design_comparison",
 ) -> dict[str, Path]:
     """Write a comparison package without asserting or fabricating human judgment."""
 
     normalized_prompt_id = _require_text(prompt_id, "prompt_id")
     normalized_prompt = _require_text(prompt, "prompt")
+    normalized_left_key = _require_text(left_key, "left_key")
+    normalized_right_key = _require_text(right_key, "right_key")
+    if normalized_left_key == normalized_right_key:
+        raise ValueError("comparison variant keys must be distinct")
+    normalized_left_label = _require_text(left_label, "left_label")
+    normalized_right_label = _require_text(right_label, "right_label")
+    normalized_artifact_type = _require_text(artifact_type, "artifact_type")
     v02_preview = _png_path(v02_preview_path, "v02_preview_path")
     v03_preview = _png_path(v03_preview_path, "v03_preview_path")
     normalized_v02_metrics = _metrics(v02_metrics, "v02_metrics")
@@ -178,17 +196,17 @@ def write_manual_review_artifacts(
 
     comparison = {
         "schema_version": "1.0",
-        "artifact_type": "v0.2_vs_v0.3_design_comparison",
+        "artifact_type": normalized_artifact_type,
         "prompt_id": normalized_prompt_id,
         "prompt": normalized_prompt,
         "variants": {
-            "v0.2": {
-                "label": "Design AI v0.2 best-of-4 winner",
+            normalized_left_key: {
+                "label": normalized_left_label,
                 "preview_path": str(v02_preview),
                 "metrics": normalized_v02_metrics,
             },
-            "v0.3": {
-                "label": "Design AI v0.3 RAG best-of-4 winner",
+            normalized_right_key: {
+                "label": normalized_right_label,
                 "preview_path": str(v03_preview),
                 "metrics": normalized_v03_metrics,
             },
@@ -209,8 +227,8 @@ def write_manual_review_artifacts(
         "review_status": "pending",
         "preferred": None,
         "scores": {
-            "v0.2": dict(review_scores),
-            "v0.3": dict(review_scores),
+            normalized_left_key: dict(review_scores),
+            normalized_right_key: dict(review_scores),
         },
         "reviewer": None,
         "notes": None,
@@ -222,7 +240,12 @@ def write_manual_review_artifacts(
     }
 
     _write_json(paths["comparison"], comparison)
-    _render_side_by_side(v02_preview, v03_preview, paths["side_by_side"])
+    _render_side_by_side(
+        v02_preview,
+        v03_preview,
+        paths["side_by_side"],
+        labels=(normalized_left_label, normalized_right_label),
+    )
     reference_rows = "".join(
         "<li><code>"
         + html.escape(str(record["reference_id"]))
@@ -254,8 +277,8 @@ def write_manual_review_artifacts(
         "<h2>Retrieved references</h2><ul>"
         f"{reference_rows}</ul>"
         "<h2>Machine metrics</h2>"
-        f"<h3>V0.2</h3><pre>{html.escape(json.dumps(normalized_v02_metrics, ensure_ascii=False, indent=2, sort_keys=True))}</pre>"
-        f"<h3>V0.3 RAG</h3><pre>{html.escape(json.dumps(normalized_v03_metrics, ensure_ascii=False, indent=2, sort_keys=True))}</pre>"
+        f"<h3>{html.escape(normalized_left_label)}</h3><pre>{html.escape(json.dumps(normalized_v02_metrics, ensure_ascii=False, indent=2, sort_keys=True))}</pre>"
+        f"<h3>{html.escape(normalized_right_label)}</h3><pre>{html.escape(json.dumps(normalized_v03_metrics, ensure_ascii=False, indent=2, sort_keys=True))}</pre>"
         "</body></html>\n",
         encoding="utf-8",
     )

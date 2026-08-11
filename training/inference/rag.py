@@ -31,6 +31,7 @@ from training.retrieval import (
     estimate_reference_tokens,
 )
 from training.typography.fitting import fit_design_typography
+from training.visual import apply_visual_composition, evaluate_visual_quality, get_visual_profile
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -191,6 +192,8 @@ class ReferenceGroundedDesignPipeline:
         model_provenance: dict[str, Any],
         top_k: int = 5,
         context_token_budget: int = 350,
+        visual_composition: bool = False,
+        benchmark_mode: bool = False,
     ) -> None:
         if not 1 <= top_k <= 8:
             raise ValueError("reference top_k must be between 1 and 8")
@@ -204,6 +207,8 @@ class ReferenceGroundedDesignPipeline:
         }
         self.top_k = top_k
         self.context_token_budget = context_token_budget
+        self.visual_composition = visual_composition
+        self.benchmark_mode = benchmark_mode
 
     def run(
         self,
@@ -238,13 +243,29 @@ class ReferenceGroundedDesignPipeline:
                 document,
                 brief=brief,
                 context=context,
+                benchmark_mode=self.benchmark_mode,
             )
+            visual_report: dict[str, object] | None = None
+            if self.visual_composition:
+                grounded, composition_report = apply_visual_composition(
+                    grounded,
+                    brief=brief,
+                    reference_palette=(
+                        context.references[0].palette if context.references else []
+                    ),
+                    benchmark_mode=self.benchmark_mode,
+                )
+                visual_report = composition_report.model_dump(mode="json")
             fitted, typography_report = fit_design_typography(
                 grounded,
                 allow_expand=False,
             )
-            return fitted, {
-                "engine": "reference_grounded_postprocessor_v1",
+            report: dict[str, object] = {
+                "engine": (
+                    "reference_grounded_postprocessor_v0.3.1"
+                    if self.visual_composition
+                    else "reference_grounded_postprocessor_v1"
+                ),
                 "reference_layout": layout_report,
                 "typography": typography_report,
                 "truncated_count": typography_report.get("truncated_count", 0),
@@ -252,6 +273,13 @@ class ReferenceGroundedDesignPipeline:
                     "unresolved_overflow_count", 0
                 ),
             }
+            if visual_report is not None:
+                report["visual_composition"] = visual_report
+                report["visual_metrics"] = evaluate_visual_quality(
+                    fitted,
+                    profile=get_visual_profile(brief.category, format_name=brief.format),
+                )
+            return fitted, report
         selection = BestOfNSelector(
             generator=generator,
             scorer=self.scorer,

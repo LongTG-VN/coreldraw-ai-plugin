@@ -275,6 +275,55 @@ def test_rag_pipeline_writes_complete_artifacts_and_fits_text(tmp_path: Path) ->
         assert design["source"]["commercial_allowed"] is False
 
 
+def test_rag_pipeline_visual_mode_is_explicit_and_business_safe(tmp_path: Path) -> None:
+    run_dir = tmp_path / "rag-visual-run"
+    result = ReferenceGroundedDesignPipeline(
+        base_generator=FakePlanner(),
+        provider=MemoryProvider([_record("menu", "centered")]),
+        scorer=_scorer(),
+        model_provenance={
+            "model_id": "Qwen/Qwen3-1.7B",
+            "model_revision": "fixture",
+            "adapter_checkpoint": "fixture/checkpoint-5",
+            "trained_model": True,
+        },
+        top_k=1,
+        context_token_budget=350,
+        visual_composition=True,
+        benchmark_mode=True,
+    ).run(
+        prompt="Food menu 6 items with prices",
+        width_mm=210,
+        height_mm=297,
+        settings=CandidateGenerationSettings(num_candidates=1, base_seed=91),
+        run_dir=run_dir,
+    )
+
+    winner = result.selection.ranking.winner
+    assert winner == "candidate_01"
+    candidate = run_dir / "candidates" / winner
+    postprocess = json.loads((candidate / "postprocess.json").read_text(encoding="utf-8"))
+    design = json.loads((candidate / "design.json").read_text(encoding="utf-8"))
+    placeholders = [
+        element
+        for element in design["elements"]
+        if element["metadata"].get("placeholder_only")
+    ]
+
+    assert postprocess["engine"] == "reference_grounded_postprocessor_v0.3.1"
+    assert postprocess["visual_composition"]["engine"] == "visual_composition_v0.3.1"
+    assert postprocess["visual_metrics"]["asset_intent_preservation"] == 1
+    assert len(placeholders) == 12
+    assert all(
+        item["metadata"]["content_provenance"] == "benchmark_placeholder"
+        for item in placeholders
+    )
+    assert not any(
+        (item.get("text") or {}).get("content") in {"39K", "44K", "49K"}
+        for item in design["elements"]
+    )
+
+
 def test_reference_layout_recovers_brief_copy_and_drops_empty_placeholders() -> None:
     raw = json.dumps(
         {
@@ -282,6 +331,7 @@ def test_reference_layout_recovers_brief_copy_and_drops_empty_placeholders() -> 
                 "headline": {"STRING": "NEW LOOK SALON", "role": "headline"},
                 "services": {"role": "body"},
                 "empty_cta": {"role": "cta"},
+                "hero": {"role": "hero"},
             }
         }
     )
@@ -303,6 +353,11 @@ def test_reference_layout_recovers_brief_copy_and_drops_empty_placeholders() -> 
 
     assert report["brief_text_recovery_count"] == 1
     assert report["unresolved_placeholder_drop_count"] == 1
+    assert report["preserved_visual_asset_placeholder_count"] == 1
+    assert any(
+        element.metadata.get("asset_intent", {}).get("role") == "hero"
+        for element in grounded.elements
+    )
     assert [element.text.content for element in grounded.elements if element.text] == [
         "NEW LOOK SALON",
         "cắt uốn nhuộm và số điện thoại",
@@ -338,3 +393,19 @@ def test_reference_layout_keeps_ten_dense_menu_rows_inside_canvas() -> None:
     assert len(
         [element for element in grounded.elements if element.metadata.get("role") == "price"]
     ) == 10
+    generated = [
+        element
+        for element in grounded.elements
+        if element.metadata.get("synthetic_brief_completion")
+    ]
+    assert generated
+    assert all(element.metadata["placeholder_only"] is True for element in generated)
+    assert all(element.metadata["requires_user_data"] is True for element in generated)
+    assert all(
+        element.metadata["content_provenance"] == "system_placeholder"
+        for element in generated
+    )
+    assert not any(
+        element.text and element.text.content in {"39K", "44K", "49K"}
+        for element in generated
+    )

@@ -58,6 +58,11 @@ def render_preview(
 
         if element.type == "rectangle":
             draw.rectangle((left, top, right, bottom), fill=fill, outline=stroke, width=stroke_width)
+            if element.metadata.get("editable_placeholder") or element.metadata.get("placeholder"):
+                # Keep missing visual intent obvious in review artifacts without
+                # introducing a fake logo/product asset into the document.
+                draw.line((left, top, right, bottom), fill=stroke, width=max(1, stroke_width))
+                draw.line((right, top, left, bottom), fill=stroke, width=max(1, stroke_width))
         elif element.type == "ellipse":
             draw.ellipse((left, top, right, bottom), fill=fill, outline=stroke, width=stroke_width)
         elif element.type == "text" and element.text is not None:
