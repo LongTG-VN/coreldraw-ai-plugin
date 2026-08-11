@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -25,6 +26,17 @@ METRICS = {
     "outside_canvas": "outside_canvas",
     "schema_validity": "schema_valid",
 }
+VISUAL_METRICS = (
+    "density_fit",
+    "palette_cohesion",
+    "contrast",
+    "headline_dominance",
+    "cta_prominence",
+    "typography_differentiation",
+    "asset_intent_preservation",
+    "decorative_balance",
+    "focal_point_strength",
+)
 
 
 def _read(path: Path) -> Any:
@@ -112,6 +124,13 @@ def compare(*, v03: Path, v031: Path, output: Path) -> dict[str, Any]:
         new = new_row["v0.3"]
         old_metrics = dict(old["winner_metrics"])
         new_metrics = dict(new["winner_metrics"])
+        new_winner_dir = Path(new["run_dir"]) / "candidates" / str(new["winner"])
+        postprocess = _read(new_winner_dir / "postprocess.json")
+        visual_metrics = postprocess.get("visual_metrics")
+        if not isinstance(visual_metrics, dict) or not all(
+            name in visual_metrics for name in VISUAL_METRICS
+        ):
+            raise ValueError(f"winner visual metrics are incomplete: {prompt_id}")
         destination = runs / prompt_id
         artifacts = write_manual_review_artifacts(
             prompt_id=prompt_id,
@@ -139,6 +158,7 @@ def compare(*, v03: Path, v031: Path, output: Path) -> dict[str, Any]:
             "v0.3_winner": old["winner"],
             "v0.3.1_winner": new["winner"],
             "v0.3.1_candidate_diversity": new["candidate_diversity"],
+            "v0.3.1_visual": visual_metrics,
             "comparison_path": str(artifacts["html"]),
             "human_reviewed": False,
         }
@@ -160,6 +180,55 @@ def compare(*, v03: Path, v031: Path, output: Path) -> dict[str, Any]:
         if old_combined
         else 0.0
     )
+    visual_averages = {
+        name: mean(float(row["v0.3.1_visual"][name]) for row in comparison_rows)
+        for name in VISUAL_METRICS
+    }
+    dense_menu: dict[str, Any] | None = None
+    if "dense_food_menu" in new_rows:
+        dense = new_rows["dense_food_menu"]["v0.3"]
+        winner_dir = Path(dense["run_dir"]) / "candidates" / str(dense["winner"])
+        document = _read(winner_dir / "design.json")
+        full_metrics = _read(winner_dir / "metrics.json")
+        postprocess = _read(winner_dir / "postprocess.json")
+        text_elements = [
+            item for item in document.get("elements", []) if isinstance(item.get("text"), dict)
+        ]
+        contents = [str(item["text"].get("content", "")) for item in text_elements]
+        ungrounded_price_values = [
+            content
+            for item, content in zip(text_elements, contents)
+            if item.get("metadata", {}).get("role") == "price"
+            and not re.fullmatch(r"\[PRICE_?\d*\]", content.strip(), re.I)
+            and item.get("metadata", {}).get("content_provenance") != "user_provided"
+        ]
+        dense_menu = {
+            "item_placeholder_count": sum(
+                len(re.findall(r"\[ITEM_\d+\]", content, re.I)) for content in contents
+            ),
+            "price_placeholder_count": sum(
+                len(re.findall(r"\[PRICE_\d+\]", content, re.I)) for content in contents
+            ),
+            "ungrounded_price_values": ungrounded_price_values,
+            "fake_customer_prices": bool(ungrounded_price_values),
+            "placeholder_provenance": sorted(
+                {
+                    str(item.get("metadata", {}).get("content_provenance"))
+                    for item in text_elements
+                    if item.get("metadata", {}).get("placeholder_only")
+                }
+            ),
+            "truncated_count": int(postprocess.get("truncated_count", 0)),
+            "unresolved_overflow_count": int(
+                postprocess.get("unresolved_overflow_count", 0)
+            ),
+            "price_alignment": float(full_metrics.get("price_alignment_consistency", 0)),
+            "text_fit": float(dense["winner_metrics"]["text_fit"]),
+            "coverage": float(dense["winner_metrics"]["coverage"]),
+            "overlap": float(dense["winner_metrics"]["overlap"]),
+            "hierarchy": float(dense["winner_metrics"]["hierarchy"]),
+            "combined": float(dense["winner_metrics"]["combined_score"]),
+        }
     new_summary = _read(v031 / "benchmark_summary.json")
     provenance = new_summary.get("candidate_provenance", {})
     summary = {
@@ -185,6 +254,8 @@ def compare(*, v03: Path, v031: Path, output: Path) -> dict[str, Any]:
         ),
         "combined_improvement_percent": improvement,
         "aggregates": aggregates,
+        "visual_averages": visual_averages,
+        "dense_menu": dense_menu,
         "human_reviewed": False,
         "human_preference_collected": False,
         "scorer_changed": False,

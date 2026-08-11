@@ -20,6 +20,22 @@ def _benchmark(root: Path, *, score: float, coverage: float) -> None:
     winner.mkdir(parents=True)
     Image.new("RGB", (120, 180), "white").save(winner / "preview.png")
     _write(winner / "design.json", {"sample_id": "spa"})
+    _write(
+        winner / "postprocess.json",
+        {
+            "visual_metrics": {
+                "density_fit": .8,
+                "palette_cohesion": .9,
+                "contrast": .9,
+                "headline_dominance": .7,
+                "cta_prominence": .6,
+                "typography_differentiation": .5,
+                "asset_intent_preservation": 1.0,
+                "decorative_balance": .8,
+                "focal_point_strength": .7,
+            }
+        },
+    )
     _write(run / "retrieval.json", {"results": []})
     metrics = {
         "combined_score": score,
@@ -79,6 +95,7 @@ def test_compare_clean_releases_writes_pending_human_artifacts(tmp_path: Path) -
     assert summary["unsafe_reused_candidates"] == 0
     assert summary["combined_improvement_percent"] == pytest.approx(10.0)
     assert summary["aggregates"]["coverage"]["v0.3.1"] == .45
+    assert summary["visual_averages"]["asset_intent_preservation"] == 1.0
     assert summary["human_preference_collected"] is False
     assert (tmp_path / "comparison" / "contact_sheet_all_13.png").is_file()
     template = json.loads(
