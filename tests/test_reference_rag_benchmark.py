@@ -10,6 +10,7 @@ from training.evaluation.scoring import DesignScorer, ScoreWeights
 from training.inference.baseline import generate_baseline_design
 from training.inference.preview import render_preview
 from training.tools.benchmark_reference_rag import (
+    _parser,
     replay_v02_prompt,
     summarize_comparison,
 )
@@ -30,6 +31,25 @@ def _scorer() -> DesignScorer:
         ),
         aesthetic_critic=HeuristicAestheticCritic(),
     )
+
+
+def test_visual_benchmark_mode_is_explicit_and_fresh_by_default() -> None:
+    args = _parser().parse_args(
+        [
+            "--checkpoint",
+            "checkpoint-5",
+            "--reference-index",
+            "reference_index.jsonl",
+            "--output",
+            "benchmark-output",
+            "--visual-composition",
+        ]
+    )
+
+    assert args.visual_composition is True
+    assert args.resume is False
+    assert args.audited_rag_cache_from is None
+    assert args.reuse_rag_candidates_from is None
 
 
 def _stored_run(tmp_path: Path, *, count: int = 2) -> Path:

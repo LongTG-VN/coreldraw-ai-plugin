@@ -790,6 +790,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         model_provenance=model_provenance,
         top_k=args.top_k,
         context_token_budget=args.context_token_budget,
+        visual_composition=bool(getattr(args, "visual_composition", False)),
+        benchmark_mode=bool(getattr(args, "visual_composition", False)),
     )
     comparison_rows: list[dict[str, Any]] = []
     for item in benchmark["prompts"]:
@@ -829,6 +831,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             v02_metrics=baseline["winner_metrics"],
             v03_preview_path=rag["winner_preview_path"],
             v03_metrics=rag["winner_metrics"],
+            v02_design_path=baseline["winner_design_path"],
+            v03_design_path=rag["winner_design_path"],
             retrieved_references=_manual_reference_records(
                 result.retrieval,
                 reference_root=args.reference_index.resolve().parent,
@@ -877,6 +881,14 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "resume_source_roots": [str(root) for root in resume_roots],
             "human_preference_collected": False,
+            "visual_composition_enabled": bool(
+                getattr(args, "visual_composition", False)
+            ),
+            "visual_engine_version": (
+                "visual_composition_v0.3.1"
+                if getattr(args, "visual_composition", False)
+                else None
+            ),
         }
     )
     _write_json(
@@ -914,6 +926,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--top-k", type=int, default=5, choices=range(1, 9))
     parser.add_argument("--context-token-budget", type=int, default=350)
+    parser.add_argument(
+        "--visual-composition",
+        action="store_true",
+        help=(
+            "Enable the frozen v0.3.1 visual engine and benchmark-only business "
+            "placeholders after reference layout recovery."
+        ),
+    )
     parser.add_argument("--reuse-rag-candidates-from", type=Path)
     parser.add_argument(
         "--audited-rag-cache-from",
