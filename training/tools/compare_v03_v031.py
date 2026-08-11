@@ -171,8 +171,18 @@ def compare(*, v03: Path, v031: Path, output: Path) -> dict[str, Any]:
         "fresh_candidates": provenance.get(
             "fresh_generation_count", new_summary.get("fresh_rag_candidate_count")
         ),
-        "resumed_verified_candidates": provenance.get("resumed_verified_candidate_count", 0),
-        "unsafe_reused_candidates": provenance.get("raw_cache_reuse_count", 0),
+        "resumed_verified_candidates": provenance.get(
+            "resumed_verified_candidate_count",
+            new_summary.get("resumed_verified_candidate_count", 0),
+        ),
+        "audited_raw_cache_reuse_candidates": provenance.get(
+            "audited_raw_cache_reuse_count",
+            new_summary.get("audited_raw_cache_reuse_count", 0),
+        ),
+        "unsafe_reused_candidates": provenance.get(
+            "unsafe_reused_candidate_count",
+            new_summary.get("unsafe_reused_candidate_count", 0),
+        ),
         "combined_improvement_percent": improvement,
         "aggregates": aggregates,
         "human_reviewed": False,

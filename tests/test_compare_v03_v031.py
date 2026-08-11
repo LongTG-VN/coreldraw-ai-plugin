@@ -52,6 +52,10 @@ def _benchmark(root: Path, *, score: float, coverage: float) -> None:
     _write(
         root / "benchmark_summary.json",
         {
+            "fresh_rag_candidate_count": 4,
+            "resumed_verified_candidate_count": 0,
+            "audited_raw_cache_reuse_count": 0,
+            "unsafe_reused_candidate_count": 0,
             "candidate_provenance": {
                 "fresh_generation_count": 4,
                 "resumed_verified_candidate_count": 0,
@@ -71,6 +75,7 @@ def test_compare_clean_releases_writes_pending_human_artifacts(tmp_path: Path) -
 
     assert summary["prompt_count"] == 1
     assert summary["fresh_candidates"] == 4
+    assert summary["audited_raw_cache_reuse_candidates"] == 0
     assert summary["unsafe_reused_candidates"] == 0
     assert summary["combined_improvement_percent"] == pytest.approx(10.0)
     assert summary["aggregates"]["coverage"]["v0.3.1"] == .45
