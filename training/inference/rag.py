@@ -135,9 +135,23 @@ class ReferenceGroundedGenerator:
             width_mm=float(kwargs["width_mm"]),
             height_mm=float(kwargs["height_mm"]),
         )
-        generation = self.base_generator.generate_raw(
-            **{**kwargs, "prompt": grounded}
+        identity_generator = getattr(
+            self.base_generator,
+            "generate_raw_with_identity",
+            None,
         )
+        if callable(identity_generator):
+            generation = identity_generator(
+                **{key: value for key, value in kwargs.items() if key != "prompt"},
+                original_prompt=original_prompt,
+                grounded_prompt=grounded,
+                reference_context_hash=self.context_hash,
+                reference_ids=self.reference_ids,
+            )
+        else:
+            generation = self.base_generator.generate_raw(
+                **{**kwargs, "prompt": grounded}
+            )
         return RawPlannerGeneration(
             raw_output=generation.raw_output,
             duration_seconds=generation.duration_seconds,

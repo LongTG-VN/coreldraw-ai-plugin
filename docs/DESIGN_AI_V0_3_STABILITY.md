@@ -39,6 +39,32 @@ Exact combined-score improvement: **+11.225728%**. All automatic success gates
 passed. Average fresh candidate generation time was 54.211896 s and peak
 inference VRAM was 1.445169 GiB on the measured local run.
 
+## Generation identity and interrupted-run recovery
+
+New benchmarks remain fresh by default. `GenerationIdentityV1` binds every raw
+response to the original prompt hash, grounded prompt hash, reference-context
+hash and ordered reference IDs, canvas, seed, complete sampling configuration,
+model revision, and checkpoint content fingerprint. Saved responses also carry
+a raw-output SHA-256 digest. Legacy four-field cache entries are rejected.
+
+Resume is explicit and non-destructive:
+
+```powershell
+python -m training.tools.benchmark_reference_rag_safe `
+  --checkpoint training/artifacts/runs/20260809_qwen3_1_7b_smoke/checkpoint-5 `
+  --reference-index training/artifacts/reference_corpora/design_v0_3/reference_index.jsonl `
+  --output training/artifacts/benchmarks/<interrupted-run> `
+  --resume
+```
+
+The interrupted `runs/` tree is preserved under `resume_sources/attempt_NNN`.
+Only candidates with complete artifacts, matching identity and raw-output
+hashes, and the same model/checkpoint are accepted. Provenance separately
+counts `fresh_generation`, `resumed_verified_candidate`, and
+`audited_raw_cache_reuse` in `generation_provenance.json`. External reuse is
+available only through the explicit `--audited-rag-cache-from` option; the old
+`--reuse-rag-candidates-from` flag remains blocked.
+
 ## Important interpretation rules
 
 ### 1. Strict-valid does not mean raw-valid

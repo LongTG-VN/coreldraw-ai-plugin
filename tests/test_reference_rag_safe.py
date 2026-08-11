@@ -24,5 +24,5 @@ def test_safe_benchmark_rejects_legacy_raw_output_reuse(monkeypatch: pytest.Monk
         ],
     )
 
-    with pytest.raises(ValueError, match="reuse is temporarily disabled"):
+    with pytest.raises(ValueError, match="reuse is disabled"):
         main()

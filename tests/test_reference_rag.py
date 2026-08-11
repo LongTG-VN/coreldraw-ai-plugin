@@ -85,6 +85,27 @@ class FakePlanner:
         )
 
 
+class IdentityAwareFakePlanner(FakePlanner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.identity_request: dict[str, object] | None = None
+
+    def generate_raw_with_identity(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.identity_request = dict(kwargs)
+        live_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key
+            not in {
+                "original_prompt",
+                "grounded_prompt",
+                "reference_context_hash",
+                "reference_ids",
+            }
+        }
+        return super().generate_raw(prompt=kwargs["grounded_prompt"], **live_kwargs)
+
+
 def _record(category: str, variant: str) -> ReferenceRecordV1:
     document = _generic_document(category, variant, ["cream", "gold"])
     features = extract_reference_features(document)
@@ -172,6 +193,41 @@ def test_grounded_prompt_is_compact_and_forbids_copying() -> None:
     assert generation.generation_config["reference_mode"] == "rag"
     assert generation.generation_config["rag_prompt_tokens"] > generation.generation_config["baseline_prompt_tokens"]
     assert generation.generation_config["reference_prompt_token_delta"] < 1000
+
+
+def test_grounded_generator_passes_complete_identity_context_when_supported() -> None:
+    provider = MemoryProvider([_record("menu", "centered")])
+    brief = analyze_brief("Food menu 6 items", width=210, height=297)
+    retrieval = ReferenceRetriever(provider).retrieve_references(brief, top_k=1)
+    context = build_reference_context(retrieval, max_tokens=350)
+    planner = IdentityAwareFakePlanner()
+    generator = ReferenceGroundedGenerator(
+        base_generator=planner,
+        brief=brief,
+        retrieval=retrieval,
+        context=context,
+    )
+
+    generator.generate_raw(
+        prompt=brief.prompt,
+        width_mm=210,
+        height_mm=297,
+        seed=42,
+        max_new_tokens=512,
+        do_sample=True,
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        repetition_penalty=1.05,
+    )
+
+    assert planner.identity_request is not None
+    assert planner.identity_request["original_prompt"] == brief.prompt
+    assert "REFERENCE-GROUNDED MODE" in str(
+        planner.identity_request["grounded_prompt"]
+    )
+    assert planner.identity_request["reference_context_hash"] == generator.context_hash
+    assert planner.identity_request["reference_ids"] == generator.reference_ids
 
 
 def test_rag_pipeline_writes_complete_artifacts_and_fits_text(tmp_path: Path) -> None:

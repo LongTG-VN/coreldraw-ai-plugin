@@ -1,10 +1,4 @@
-"""Safe v0.3 benchmark entrypoint.
-
-The legacy benchmark supports raw-output reuse for long local runs. Its current
-reuse cache is not prompt-aware, so prompts that share dimensions, seed and
-max_new_tokens can collide. Until that cache is migrated, this entrypoint
-intentionally disables reuse and requires fresh model generations.
-"""
+"""Safe v0.3 benchmark entrypoint; fresh unless resume/audited reuse is explicit."""
 
 from __future__ import annotations
 
@@ -19,8 +13,8 @@ def main() -> int:
         raise ValueError("context-token-budget must be at least 128")
     if args.reuse_rag_candidates_from is not None:
         raise ValueError(
-            "raw RAG candidate reuse is temporarily disabled because the legacy "
-            "cache key is not prompt/context-aware; run a fresh benchmark instead"
+            "legacy raw RAG candidate reuse is disabled; use fresh generation, "
+            "--resume, or --audited-rag-cache-from"
         )
     summary = run_benchmark(args)
     print(json.dumps(summary, ensure_ascii=False, indent=2))

@@ -14,6 +14,7 @@ import shutil
 import statistics
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,13 @@ from training.evaluation.scoring import (
     rank_candidate_scores,
 )
 from training.inference.candidates import CandidateGenerationSettings
+from training.inference.generation_identity import (
+    GenerationIdentityV1,
+    build_generation_identity,
+    fingerprint_checkpoint,
+    generation_config_from_kwargs,
+    sha256_text,
+)
 from training.inference.qwen3_planner import Qwen3PlannerSession, RawPlannerGeneration
 from training.inference.rag import ReferenceGroundedDesignPipeline
 from training.retrieval import JsonlReferenceProvider
@@ -47,59 +55,226 @@ DEFAULT_BENCHMARK_CONFIG = Path("training/config/benchmarks/design_v0_2.json")
 SUCCESS_SCORE_IMPROVEMENT_PERCENT = 8.0
 
 
-class ReusingRagGenerator:
-    """Reuse exact saved RAG raw outputs while rerunning current postprocessing."""
+@dataclass(frozen=True)
+class _VerifiedGeneration:
+    generation: RawPlannerGeneration
+    source: Path
+    provenance: str
+    raw_sha256: str
 
-    def __init__(self, live: Qwen3PlannerSession, cache_root: Path | None) -> None:
+
+class AuditedRagGenerator:
+    """Generate fresh by default and accept only identity-verified saved outputs."""
+
+    def __init__(
+        self,
+        live: Qwen3PlannerSession,
+        *,
+        model_id: str,
+        model_revision: str,
+        checkpoint: Path,
+        audited_cache_root: Path | None = None,
+        resume_roots: Sequence[Path] = (),
+    ) -> None:
         self.live = live
         self.tokenizer = live.tokenizer
-        self.cache_root = cache_root.resolve() if cache_root else None
-        self.cache: dict[tuple[float, float, int, int], RawPlannerGeneration] = {}
-        self.reuse_hits = 0
+        self.model_id = model_id
+        self.model_revision = model_revision
+        self.checkpoint_sha256 = fingerprint_checkpoint(checkpoint)
+        self.cache_root = (
+            audited_cache_root.resolve() if audited_cache_root is not None else None
+        )
+        self.resume_roots = [root.resolve() for root in resume_roots]
+        self.cache: dict[str, _VerifiedGeneration] = {}
+        self.fresh_generation_count = 0
+        self.resume_hits = 0
+        self.audited_cache_hits = 0
+        self.rejected_entries: list[dict[str, str]] = []
+        self.ambiguous_identities: set[str] = set()
+        for root in self.resume_roots:
+            self._load_root(root, provenance="resumed_verified_candidate")
         if self.cache_root is not None:
-            for request_path in self.cache_root.glob("runs/*/request.json"):
-                request = _read_json(request_path)
-                if request.get("reference_mode") != "rag":
-                    continue
-                for candidate_dir in (request_path.parent / "candidates").glob(
-                    "candidate_*"
-                ):
-                    generation_path = candidate_dir / "generation.json"
-                    raw_path = candidate_dir / "raw_output.txt"
-                    if not generation_path.is_file() or not raw_path.is_file():
-                        continue
-                    generation = _read_json(generation_path)
-                    config = generation["config"]
-                    key = (
-                        float(request["width_mm"]),
-                        float(request["height_mm"]),
-                        int(generation["seed"]),
-                        int(config["max_new_tokens"]),
-                    )
-                    self.cache[key] = RawPlannerGeneration(
-                        raw_output=raw_path.read_text(encoding="utf-8"),
-                        duration_seconds=float(generation["duration_seconds"]),
-                        seed=int(generation["seed"]),
-                        generation_config={
-                            **config,
-                            "reused_raw_output": True,
-                            "reused_from": str(candidate_dir.resolve()),
-                        },
-                        peak_vram_gib=float(generation["peak_vram_gib"]),
-                    )
+            self._load_root(self.cache_root, provenance="audited_raw_cache_reuse")
+
+    @property
+    def reuse_hits(self) -> int:
+        """Backwards-compatible aggregate; new summaries expose both kinds."""
+
+        return self.resume_hits + self.audited_cache_hits
+
+    def _reject(self, candidate_dir: Path, reason: str) -> None:
+        self.rejected_entries.append(
+            {"candidate_directory": str(candidate_dir.resolve()), "reason": reason}
+        )
+
+    def _candidate_complete(self, candidate_dir: Path) -> bool:
+        base = (
+            "raw_output.txt",
+            "generation.json",
+            "validation.json",
+            "metrics.json",
+            "score.json",
+        )
+        if any(not (candidate_dir / name).is_file() for name in base):
+            return False
+        validation = _read_json(candidate_dir / "validation.json")
+        if bool(validation.get("strict_schema_valid")):
+            required_valid = ("design.json", "preview.png", "corel_operations.json")
+            return all((candidate_dir / name).is_file() for name in required_valid)
+        return True
+
+    def _load_root(self, root: Path, *, provenance: str) -> None:
+        if not root.is_dir():
+            raise FileNotFoundError(f"generation source does not exist: {root}")
+        for generation_path in root.glob("runs/*/candidates/candidate_*/generation.json"):
+            candidate_dir = generation_path.parent
+            if not self._candidate_complete(candidate_dir):
+                self._reject(candidate_dir, "candidate_artifacts_incomplete")
+                continue
+            try:
+                generation = _read_json(generation_path)
+                config = generation["config"]
+                identity = GenerationIdentityV1.model_validate(
+                    config["generation_identity"]
+                )
+                identity_hash = identity.identity_sha256
+                if config.get("generation_identity_sha256") != identity_hash:
+                    raise ValueError("generation_identity_sha256_mismatch")
+                if identity.model_id != self.model_id:
+                    raise ValueError("model_id_mismatch")
+                if identity.model_revision != self.model_revision:
+                    raise ValueError("model_revision_mismatch")
+                if identity.checkpoint_sha256 != self.checkpoint_sha256:
+                    raise ValueError("checkpoint_sha256_mismatch")
+                if int(generation["seed"]) != identity.seed:
+                    raise ValueError("generation_seed_mismatch")
+                raw_output = (candidate_dir / "raw_output.txt").read_text(
+                    encoding="utf-8"
+                )
+                raw_sha256 = sha256_text(raw_output)
+                if config.get("raw_output_sha256") != raw_sha256:
+                    raise ValueError("raw_output_sha256_mismatch")
+            except (KeyError, TypeError, ValueError) as exc:
+                self._reject(candidate_dir, str(exc))
+                continue
+            cached = _VerifiedGeneration(
+                generation=RawPlannerGeneration(
+                    raw_output=raw_output,
+                    duration_seconds=float(generation["duration_seconds"]),
+                    seed=int(generation["seed"]),
+                    generation_config=dict(config),
+                    peak_vram_gib=float(generation["peak_vram_gib"]),
+                ),
+                source=candidate_dir.resolve(),
+                provenance=provenance,
+                raw_sha256=raw_sha256,
+            )
+            existing = self.cache.get(identity_hash)
+            if identity_hash in self.ambiguous_identities:
+                self._reject(candidate_dir, "ambiguous_identity_already_rejected")
+                continue
+            if existing is not None and existing.raw_sha256 != raw_sha256:
+                self.cache.pop(identity_hash, None)
+                self.ambiguous_identities.add(identity_hash)
+                self._reject(candidate_dir, "ambiguous_identity_with_different_raw_output")
+                continue
+            if existing is not None:
+                continue
+            self.cache[identity_hash] = cached
+
+    def _identity(
+        self,
+        *,
+        original_prompt: str,
+        grounded_prompt: str,
+        reference_context_hash: str,
+        reference_ids: list[str],
+        kwargs: dict[str, Any],
+    ) -> GenerationIdentityV1:
+        return build_generation_identity(
+            original_prompt=original_prompt,
+            grounded_prompt=grounded_prompt,
+            reference_context_hash=reference_context_hash,
+            reference_ids=reference_ids,
+            width_mm=float(kwargs["width_mm"]),
+            height_mm=float(kwargs["height_mm"]),
+            seed=int(kwargs["seed"]),
+            generation_config=generation_config_from_kwargs(kwargs),
+            model_id=self.model_id,
+            model_revision=self.model_revision,
+            checkpoint_sha256=self.checkpoint_sha256,
+        )
+
+    def generate_raw_with_identity(
+        self,
+        *,
+        original_prompt: str,
+        grounded_prompt: str,
+        reference_context_hash: str,
+        reference_ids: list[str],
+        **kwargs: Any,
+    ) -> RawPlannerGeneration:
+        identity = self._identity(
+            original_prompt=original_prompt,
+            grounded_prompt=grounded_prompt,
+            reference_context_hash=reference_context_hash,
+            reference_ids=reference_ids,
+            kwargs=kwargs,
+        )
+        identity_hash = identity.identity_sha256
+        cached = self.cache.get(identity_hash)
+        if cached is not None:
+            if cached.provenance == "resumed_verified_candidate":
+                self.resume_hits += 1
+            else:
+                self.audited_cache_hits += 1
+            return RawPlannerGeneration(
+                raw_output=cached.generation.raw_output,
+                duration_seconds=cached.generation.duration_seconds,
+                seed=cached.generation.seed,
+                generation_config={
+                    **cached.generation.generation_config,
+                    "generation_provenance": cached.provenance,
+                    "generation_identity": identity.model_dump(mode="json"),
+                    "generation_identity_sha256": identity_hash,
+                    "raw_output_sha256": cached.raw_sha256,
+                    "generation_source": str(cached.source),
+                    "resumed_verified_candidate": (
+                        cached.provenance == "resumed_verified_candidate"
+                    ),
+                    "audited_raw_cache_reuse": (
+                        cached.provenance == "audited_raw_cache_reuse"
+                    ),
+                },
+                peak_vram_gib=cached.generation.peak_vram_gib,
+            )
+        fresh = self.live.generate_raw(prompt=grounded_prompt, **kwargs)
+        self.fresh_generation_count += 1
+        raw_sha256 = sha256_text(fresh.raw_output)
+        return RawPlannerGeneration(
+            raw_output=fresh.raw_output,
+            duration_seconds=fresh.duration_seconds,
+            seed=fresh.seed,
+            generation_config={
+                **fresh.generation_config,
+                "generation_provenance": "fresh_generation",
+                "generation_identity": identity.model_dump(mode="json"),
+                "generation_identity_sha256": identity_hash,
+                "raw_output_sha256": raw_sha256,
+                "resumed_verified_candidate": False,
+                "audited_raw_cache_reuse": False,
+            },
+            peak_vram_gib=fresh.peak_vram_gib,
+        )
 
     def generate_raw(self, **kwargs: Any) -> RawPlannerGeneration:
-        key = (
-            float(kwargs["width_mm"]),
-            float(kwargs["height_mm"]),
-            int(kwargs["seed"]),
-            int(kwargs["max_new_tokens"]),
-        )
-        cached = self.cache.get(key)
-        if cached is not None:
-            self.reuse_hits += 1
-            return cached
+        """Compatibility fallback for non-RAG callers; never consults the cache."""
+
+        self.fresh_generation_count += 1
         return self.live.generate_raw(**kwargs)
+
+
+ReusingRagGenerator = AuditedRagGenerator
 
 
 def _read_json(path: Path) -> Any:
@@ -114,6 +289,30 @@ def _write_json(path: Path, payload: object) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _prepare_benchmark_output(output: Path, *, resume: bool) -> list[Path]:
+    """Preserve interrupted artifacts and return identity-audited resume roots."""
+
+    if not output.exists():
+        output.mkdir(parents=True)
+        return []
+    if not output.is_dir():
+        raise ValueError(f"benchmark output is not a directory: {output}")
+    if not resume:
+        raise FileExistsError(f"benchmark output already exists: {output}")
+    runs = output / "runs"
+    if not runs.exists():
+        return []
+    sources = output / "resume_sources"
+    sources.mkdir(exist_ok=True)
+    attempt = 1
+    while (sources / f"attempt_{attempt:03d}").exists():
+        attempt += 1
+    target = sources / f"attempt_{attempt:03d}"
+    target.mkdir()
+    shutil.move(str(runs), str(target / "runs"))
+    return [target]
 
 
 def load_v03_scorer(score_config_path: Path) -> DesignScorer:
@@ -507,8 +706,15 @@ def _manual_reference_records(
 
 def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     output = args.output.resolve()
-    if output.exists():
-        raise FileExistsError(f"benchmark output already exists: {output}")
+    if getattr(args, "reuse_rag_candidates_from", None) is not None:
+        raise ValueError(
+            "legacy raw-output reuse is disabled; use --audited-rag-cache-from "
+            "or --resume so prompt/context/model identity is verified"
+        )
+    resume_roots = _prepare_benchmark_output(
+        output,
+        resume=bool(getattr(args, "resume", False)),
+    )
     v02_root = args.v02_benchmark.resolve()
     published_summary_path = v02_root / "benchmark_summary.json"
     published_summary = _read_json(published_summary_path)
@@ -518,7 +724,6 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     scorer = load_v03_scorer(args.score_config)
     reference_provider = JsonlReferenceProvider(args.reference_index.resolve())
 
-    output.mkdir(parents=True)
     shutil.copyfile(published_summary_path, output / "v0.2_published_summary.json")
     replay_rows: dict[str, dict[str, Any]] = {}
     for item in benchmark["prompts"]:
@@ -570,9 +775,13 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         model_id=model_config["model_id"],
         model_revision=model_config["model_revision"],
     )
-    generator = ReusingRagGenerator(
+    generator = AuditedRagGenerator(
         session,
-        getattr(args, "reuse_rag_candidates_from", None),
+        model_id=model_config["model_id"],
+        model_revision=model_config["model_revision"],
+        checkpoint=args.checkpoint,
+        audited_cache_root=getattr(args, "audited_rag_cache_from", None),
+        resume_roots=resume_roots,
     )
     pipeline = ReferenceGroundedDesignPipeline(
         base_generator=generator,
@@ -632,6 +841,16 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         comparison_rows,
         scorer_provenance=scorer.provenance(),
     )
+    accounted_candidates = (
+        generator.fresh_generation_count
+        + generator.resume_hits
+        + generator.audited_cache_hits
+    )
+    if accounted_candidates != 52:
+        raise ValueError(
+            "generation provenance must account for exactly 52 candidates: "
+            f"observed {accounted_candidates}"
+        )
     summary.update(
         {
             "published_v0.2_summary": "v0.2_published_summary.json",
@@ -645,11 +864,36 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "model": model_provenance,
             "model_load_seconds": float(session.load_duration_seconds),
             "reused_rag_candidate_count": generator.reuse_hits,
+            "fresh_rag_candidate_count": generator.fresh_generation_count,
+            "resumed_verified_candidate_count": generator.resume_hits,
+            "audited_raw_cache_reuse_count": generator.audited_cache_hits,
+            "unsafe_reused_candidate_count": 0,
+            "generation_identity_schema": "GenerationIdentityV1",
+            "generation_identity_rejected_entry_count": len(
+                generator.rejected_entries
+            ),
             "rag_reuse_source": (
                 str(generator.cache_root) if generator.cache_root is not None else None
             ),
+            "resume_source_roots": [str(root) for root in resume_roots],
             "human_preference_collected": False,
         }
+    )
+    _write_json(
+        output / "generation_provenance.json",
+        {
+            "schema_version": "1.0",
+            "identity_schema": "GenerationIdentityV1",
+            "fresh_candidate_count": generator.fresh_generation_count,
+            "resumed_verified_candidate_count": generator.resume_hits,
+            "audited_raw_cache_reuse_count": generator.audited_cache_hits,
+            "unsafe_reused_candidate_count": 0,
+            "resume_source_roots": [str(root) for root in resume_roots],
+            "audited_cache_root": (
+                str(generator.cache_root) if generator.cache_root is not None else None
+            ),
+            "rejected_entries": generator.rejected_entries,
+        },
     )
     _write_json(output / "benchmark_rows.json", comparison_rows)
     _write_json(output / "fair_replay_v0.2.json", list(replay_rows.values()))
@@ -671,6 +915,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=int, default=5, choices=range(1, 9))
     parser.add_argument("--context-token-budget", type=int, default=350)
     parser.add_argument("--reuse-rag-candidates-from", type=Path)
+    parser.add_argument(
+        "--audited-rag-cache-from",
+        type=Path,
+        help="Explicit identity-v1 cache source; legacy cache entries are rejected.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume an interrupted output using only identity-verified candidates.",
+    )
     return parser
 
 

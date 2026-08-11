@@ -1,9 +1,7 @@
 """Safe public entrypoint for the v0.3 fair RAG benchmark.
 
-The original implementation is preserved in ``_benchmark_reference_rag_impl``
-for reproducibility, but raw-output reuse is intentionally blocked here. The
-legacy cache key was not prompt/context-aware, so using it can contaminate a
-multi-prompt benchmark when prompts share dimensions and seeds.
+Fresh generation remains the default. The unsafe legacy reuse flag stays
+blocked; explicit audited cache and resume modes use GenerationIdentityV1.
 """
 
 from __future__ import annotations
@@ -25,8 +23,8 @@ from training.tools._benchmark_reference_rag_impl import (
 )
 
 UNSAFE_REUSE_ERROR = (
-    "raw RAG candidate reuse is disabled for v0.3 validation because the legacy "
-    "cache key is not prompt/context-aware; run fresh generations instead"
+    "legacy raw RAG candidate reuse is disabled; use fresh generation, --resume, "
+    "or --audited-rag-cache-from with GenerationIdentityV1 verification"
 )
 
 
