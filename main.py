@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import FastAPI
@@ -18,6 +19,14 @@ from template_engine import TemplateEngine, TemplateRegistry, TemplateRegistryEr
 from template_models import MenuRenderRequest
 from training.inference.baseline import generate_baseline_design
 from training.inference.contract import DesignGenerateRequest, DesignGenerateResponse
+from training.inference.service import (
+    TrainedDesignGenerationError,
+    TrainedDesignRequest,
+    TrainedDesignResponse,
+    TrainedDesignService,
+    TrainedDesignUnavailableError,
+    TrainedModelStatus,
+)
 from transaction_engine import DesignTransactionEngine, DesignTransactionError
 
 app = FastAPI(
@@ -41,6 +50,9 @@ app.add_middleware(
 manifest_dir = os.getenv("COREL_TEMPLATE_MANIFEST_DIR", "templates/manifests")
 template_registry = TemplateRegistry(manifest_dir)
 template_engine = TemplateEngine(template_registry, corel_bridge, extended_bridge)
+trained_design_service = TrainedDesignService.from_environment(
+    Path(__file__).resolve().parent
+)
 
 
 class CMYKColor(BaseModel):
@@ -572,6 +584,32 @@ def design_transaction(req: DesignTransactionRequest) -> dict[str, object]:
     )
 
 
+@app.exception_handler(TrainedDesignUnavailableError)
+async def handle_trained_design_unavailable(
+    _request: Request, exc: TrainedDesignUnavailableError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "status": "unavailable",
+            "code": "trained_design_unavailable",
+            "detail": str(exc),
+        },
+    )
+
+
+@app.exception_handler(TrainedDesignGenerationError)
+async def handle_trained_design_generation_error(
+    _request: Request, exc: TrainedDesignGenerationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "code": "trained_design_generation_failed",
+            "detail": str(exc),
+        },
+    )
 @app.post("/design/generate", response_model=DesignGenerateResponse)
 @app.post("/api/v1/design/generate", response_model=DesignGenerateResponse)
 def design_generate(req: DesignGenerateRequest) -> DesignGenerateResponse:
@@ -591,6 +629,23 @@ def design_generate(req: DesignGenerateRequest) -> DesignGenerateResponse:
             "corel_transaction_endpoint": "/api/v1/design/transaction",
         },
     )
+
+
+@app.get("/api/v1/design/model/status", response_model=TrainedModelStatus)
+def trained_design_model_status() -> TrainedModelStatus:
+    """Report local availability without loading Qwen or allocating VRAM."""
+
+    return trained_design_service.status()
+
+
+@app.post(
+    "/api/v1/design/generate-trained",
+    response_model=TrainedDesignResponse,
+)
+def trained_design_generate(req: TrainedDesignRequest) -> TrainedDesignResponse:
+    """Run the explicit research-only trained RAG + visual pipeline."""
+
+    return trained_design_service.generate(req)
 
 
 @app.post("/api/v1/design/feedback-context")
