@@ -195,6 +195,73 @@ def test_sale_without_customer_discount_uses_marked_placeholder() -> None:
     assert not any("39K" in item.text.content for item in visual.elements if item.text)
 
 
+def test_ungrounded_campaign_values_are_sanitized_but_user_values_survive() -> None:
+    original = _document(category="khai_truong")
+    original.elements.extend(
+        [
+            _text(
+                original.canvas,
+                element_id="invented_discount",
+                role="promotion",
+                content="Sale 50% off",
+                box=(.08, .50, .40, .08),
+                font_size=15,
+            ),
+            _text(
+                original.canvas,
+                element_id="invented_offer",
+                role="promotion",
+                content="Mua 1, tặng 1",
+                box=(.08, .60, .40, .08),
+                font_size=13,
+            ),
+            _text(
+                original.canvas,
+                element_id="invented_date",
+                role="body",
+                content="Hạn chót ngày 30/10",
+                box=(.08, .70, .40, .08),
+                font_size=10,
+            ),
+        ]
+    )
+    brief = analyze_brief("Thiết kế poster sale khai trương nổi bật", width=210, height=297)
+    visual, report = apply_visual_composition(original, brief=brief)
+    values = {
+        item.id: item.text.content for item in visual.elements if item.text is not None
+    }
+
+    assert values["invented_discount"] == "[DISCOUNT]"
+    assert values["invented_offer"] == "[OFFER]"
+    assert values["invented_date"] == "[DATE]"
+    assert report.business_placeholder_count == 3
+    sanitized = [
+        item
+        for item in visual.elements
+        if item.metadata.get("sanitized_ungrounded_business_value")
+    ]
+    assert len(sanitized) == 3
+    assert all(item.metadata["content_provenance"] == "system_placeholder" for item in sanitized)
+    assert all(item.metadata["requires_user_data"] is True for item in sanitized)
+
+    supplied = _document(category="poster_sale")
+    supplied.elements.append(
+        _text(
+            supplied.canvas,
+            element_id="provided_discount",
+            role="promotion",
+            content="Sale 50% off",
+            box=(.08, .50, .40, .08),
+            font_size=15,
+        )
+    )
+    supplied_brief = analyze_brief("Poster sale giảm 50%", width=210, height=297)
+    grounded, _ = apply_visual_composition(supplied, brief=supplied_brief)
+    preserved = next(item for item in grounded.elements if item.id == "provided_discount")
+    assert preserved.text is not None and preserved.text.content == "Sale 50% off"
+    assert preserved.metadata["content_provenance"] == "model_generated_copy"
+
+
 def test_light_requested_menu_color_is_not_used_as_price_text() -> None:
     original = _document(category="menu")
     original.elements.append(

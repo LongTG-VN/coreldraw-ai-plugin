@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Iterable
 
 from training.retrieval.models import StructuredBriefV1
@@ -25,7 +26,55 @@ from training.visual.typography import apply_semantic_typography
 
 
 VISUAL_ENGINE_VERSION = "visual_composition_v0.3.1"
-_PLACEHOLDER_RE = re.compile(r"^\[(?:ITEM|DESCRIPTION|PRICE|DISCOUNT|OFFER)_?\d*\]$", re.I)
+_PLACEHOLDER_RE = re.compile(
+    r"^\[(?:ITEM|DESCRIPTION|PRICE|DISCOUNT|OFFER|DATE)_?\d*\]$",
+    re.I,
+)
+_PERCENT_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[.,]\d+)?)\s*%")
+_MONEY_RE = re.compile(r"(?<!\w)(\d+(?:[.,]\d+)?)\s*(k|vnd|đ|₫)(?!\w)", re.I)
+_DATE_RE = re.compile(r"(?<!\d)(\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?)(?!\d)")
+_BOGO_RE = re.compile(r"\bmua\s*(\d+)\D{0,12}tang\s*(\d+)\b", re.I)
+
+
+def _plain(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.casefold())
+    return "".join(
+        character for character in normalized if not unicodedata.combining(character)
+    )
+
+
+def _ungrounded_business_placeholder(
+    content: str,
+    *,
+    brief: StructuredBriefV1,
+) -> str | None:
+    """Replace concrete campaign values that are absent from the user brief."""
+
+    if normalize_visual_category(brief.category) not in {"sale", "grand_opening"}:
+        return None
+    prompt = _plain(brief.prompt)
+    candidate = _plain(content)
+    for match in _PERCENT_RE.finditer(candidate):
+        if not any(item.group(1) == match.group(1) for item in _PERCENT_RE.finditer(prompt)):
+            return "[DISCOUNT]"
+    for match in _MONEY_RE.finditer(candidate):
+        datum = (match.group(1), match.group(2).casefold())
+        if not any(
+            (item.group(1), item.group(2).casefold()) == datum
+            for item in _MONEY_RE.finditer(prompt)
+        ):
+            return "[DISCOUNT]"
+    for match in _BOGO_RE.finditer(candidate):
+        datum = (match.group(1), match.group(2))
+        if not any(
+            (item.group(1), item.group(2)) == datum
+            for item in _BOGO_RE.finditer(prompt)
+        ):
+            return "[OFFER]"
+    for match in _DATE_RE.finditer(candidate):
+        if not any(item.group(1) == match.group(1) for item in _DATE_RE.finditer(prompt)):
+            return "[DATE]"
+    return None
 
 
 def _color(value: str) -> ColorSpec:
@@ -137,6 +186,21 @@ def _mark_content_provenance(
             continue
         metadata = element.metadata
         role = infer_text_role(element, largest_font=largest)
+        business_placeholder = _ungrounded_business_placeholder(
+            element.text.content,
+            brief=brief,
+        )
+        if business_placeholder is not None:
+            element.text.content = business_placeholder
+            metadata.update(
+                {
+                    "role": "promotion" if business_placeholder != "[DATE]" else "date",
+                    "synthetic_brief_completion": True,
+                    "placeholder_only": True,
+                    "requires_user_data": True,
+                    "sanitized_ungrounded_business_value": True,
+                }
+            )
         if menu_requested and role in menu_role_counts and not metadata.get("brief_text_recovery"):
             menu_role_counts[role] += 1
             index = menu_role_counts[role]
