@@ -175,6 +175,8 @@ def replay(*, source: Path, output: Path, score_config: Path) -> dict[str, Any]:
             v02_metrics=before_metrics,
             v03_preview_path=after_dir / "preview.png",
             v03_metrics=after_metrics,
+            v02_design_path=before_dir / "design.json",
+            v03_design_path=after_dir / "design.json",
             retrieved_references=_reference_rows(source_run),
             output_dir=destination,
             left_key="v0.3",

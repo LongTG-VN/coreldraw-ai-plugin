@@ -500,7 +500,11 @@ def apply_reference_layout_guidance(
             if has_visual_column
             else (1 - 2 * margin if centered else 0.62)
         )
-        _set_norm_box(output, headline[0], (headline_x, margin, headline_width, 0.15))
+        _set_norm_box(
+            output,
+            headline[0],
+            (headline_x, margin, headline_width, 0.17 if has_visual_column else 0.15),
+        )
         content = subtitles + bodies + menu_items + prices
         content_x = (
             0.42

@@ -36,6 +36,21 @@ def _png_path(value: str | Path, field: str) -> Path:
     return path
 
 
+def _optional_json_path(value: str | Path | None, field: str) -> Path | None:
+    if value is None:
+        return None
+    path = Path(value).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"{field} does not exist: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field} is not valid JSON: {path}") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{field} JSON root must be an object: {path}")
+    return path
+
+
 def _json_value(value: Any, field: str) -> Any:
     if value is None or isinstance(value, (str, bool, int)):
         return value
@@ -148,6 +163,8 @@ def write_manual_review_artifacts(
     v02_metrics: Mapping[str, Any],
     v03_preview_path: str | Path,
     v03_metrics: Mapping[str, Any],
+    v02_design_path: str | Path | None = None,
+    v03_design_path: str | Path | None = None,
     retrieved_references: Sequence[Mapping[str, Any]],
     output_dir: str | Path,
     left_key: str = "v0.2",
@@ -169,6 +186,8 @@ def write_manual_review_artifacts(
     normalized_artifact_type = _require_text(artifact_type, "artifact_type")
     v02_preview = _png_path(v02_preview_path, "v02_preview_path")
     v03_preview = _png_path(v03_preview_path, "v03_preview_path")
+    v02_design = _optional_json_path(v02_design_path, "v02_design_path")
+    v03_design = _optional_json_path(v03_design_path, "v03_design_path")
     normalized_v02_metrics = _metrics(v02_metrics, "v02_metrics")
     normalized_v03_metrics = _metrics(v03_metrics, "v03_metrics")
     normalized_references = _references(retrieved_references)
@@ -203,11 +222,13 @@ def write_manual_review_artifacts(
             normalized_left_key: {
                 "label": normalized_left_label,
                 "preview_path": str(v02_preview),
+                "design_path": str(v02_design) if v02_design else None,
                 "metrics": normalized_v02_metrics,
             },
             normalized_right_key: {
                 "label": normalized_right_label,
                 "preview_path": str(v03_preview),
+                "design_path": str(v03_design) if v03_design else None,
                 "metrics": normalized_v03_metrics,
             },
         },
