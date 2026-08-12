@@ -181,6 +181,61 @@ def test_status_is_lazy_and_does_not_construct_session(tmp_path: Path) -> None:
     assert first.revision == MODEL_REVISION
 
 
+def test_visual_runtime_status_is_lazy_and_independent_from_planner(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    visual_index = tmp_path / "visual-index"
+    visual_index.mkdir()
+    (visual_index / "index_manifest.json").write_text("{}\n", encoding="utf-8")
+    visual_config = tmp_path / "visual-config.json"
+    visual_config.write_text(
+        json.dumps(
+            {
+                "embedding": {
+                    "model_id": "fixture/visual",
+                    "revision": "fixture-revision",
+                },
+                "weights": {
+                    "structural": .45,
+                    "visual_text": .40,
+                    "visual_asset": .15,
+                },
+                "mmr_lambda": .70,
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = 0
+
+    def visual_factory(**kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        raise AssertionError(f"visual model must remain lazy: {kwargs}")
+
+    service = TrainedDesignService(
+        config.__class__(
+            **{
+                **config.__dict__,
+                "visual_index": visual_index,
+                "visual_config": visual_config,
+                "visual_enabled": True,
+            }
+        ),
+        session_factory=FakeSession,
+        visual_embedder_factory=visual_factory,
+    )
+
+    status = service.status()
+
+    assert calls == 0
+    assert status.planner_model["loaded"] is False
+    assert status.visual_embedding_model["configured"] is True
+    assert status.visual_embedding_model["loaded"] is False
+    assert status.structural_index["available"] is True
+    assert status.visual_index["available"] is True
+
+
 def test_service_loads_once_reuses_session_and_writes_manifest(tmp_path: Path) -> None:
     sessions: list[FakeSession] = []
 

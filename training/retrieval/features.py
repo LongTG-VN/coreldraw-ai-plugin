@@ -84,6 +84,14 @@ def _color_tag(color: ColorSpec | None) -> str | None:
     return "#" + "".join(f"{max(0, min(255, channel)):02X}" for channel in rgb)
 
 
+def _luminance(color: ColorSpec | None) -> float | None:
+    tag = _color_tag(color)
+    if tag is None:
+        return None
+    red, green, blue = (int(tag[index : index + 2], 16) / 255 for index in (1, 3, 5))
+    return max(0.0, min(1.0, .2126 * red + .7152 * green + .0722 * blue))
+
+
 def _density(text_count: int, character_count: int, element_count: int) -> TextDensity:
     if text_count >= 8 or character_count >= 260 or element_count >= 14:
         return "high"
@@ -211,6 +219,56 @@ def extract_reference_features(document: DesignDocument) -> ReferenceFeaturesV1:
             colors.append(color)
     character_count = sum(len(item.text.content) for item in text_elements if item.text)
     composition = _composition(alignment, hero.region if hero else None, regions)
+    text_area = min(
+        1.0,
+        sum(float(item.bbox_norm.width * item.bbox_norm.height) for item in text_elements),
+    )
+    decorative_elements = [
+        item for item in elements
+        if item.text is None and item.type not in {"image", "svg"}
+    ]
+    decorative_area = min(
+        1.0,
+        sum(float(item.bbox_norm.width * item.bbox_norm.height) for item in decorative_elements),
+    )
+    headline_box = next((box for box in boxes if box.role == "headline"), None)
+    headline_area = float(headline_box.width * headline_box.height) if headline_box else 0.0
+    hero_area = float(hero.width * hero.height) if hero else 0.0
+    if hero_area > max(.16, headline_area * 1.8):
+        visual_hierarchy = "image_dominant"
+    elif headline_area > max(.08, hero_area * 1.6):
+        visual_hierarchy = "headline_dominant"
+    else:
+        visual_hierarchy = "balanced"
+    font_names = [str(item.text.font_family or "").casefold() for item in text_elements]
+    if any("condensed" in name for name in font_names):
+        typography_intent = "condensed"
+    elif headline_body_ratio >= 2.2:
+        typography_intent = "display_heavy"
+    elif whitespace >= .58 and len(text_elements) <= 4:
+        typography_intent = "minimal"
+    elif alignment == "mixed":
+        typography_intent = "editorial"
+    else:
+        typography_intent = "balanced"
+    if composition == "modular_grid":
+        visual_rhythm = "grid"
+    elif "hero_left" in composition or "hero_right" in composition:
+        visual_rhythm = "two_column"
+    elif alignment in {"left", "center", "right"}:
+        visual_rhythm = "stacked"
+    else:
+        areas = sorted((float(box.width * box.height) for box in boxes), reverse=True)
+        visual_rhythm = (
+            "large_small_large"
+            if len(areas) >= 3 and areas[0] > areas[1] * 1.5 and areas[2] > areas[1]
+            else "balanced"
+        )
+    background_luminance = (
+        _luminance(document.canvas.background.fill)
+        if document.canvas.background is not None
+        else None
+    )
     return ReferenceFeaturesV1(
         normalized_element_boxes=boxes,
         element_roles=[roles[item.id] for item in elements],
@@ -233,12 +291,20 @@ def extract_reference_features(document: DesignDocument) -> ReferenceFeaturesV1:
         dominant_colors=colors[:12],
         aspect_ratio=float(document.canvas.width) / float(document.canvas.height),
         text_density=_density(len(text_elements), character_count, len(elements)),
+        text_area_ratio=text_area,
+        decorative_area_ratio=decorative_area,
+        background_luminance=background_luminance,
+        visual_hierarchy=visual_hierarchy,
+        typography_intent=typography_intent,
+        visual_rhythm=visual_rhythm,
     )
 
 
 def summarize_reference(
     metadata: ReferenceMetadataV1,
     features: ReferenceFeaturesV1,
+    *,
+    include_visual: bool = False,
 ) -> ReferenceDesignSummaryV1:
     hierarchy = sorted(
         features.normalized_element_boxes,
@@ -284,4 +350,23 @@ def summarize_reference(
         cta=(PlacementSummaryV1(region=features.cta_position) if features.cta_position else None),
         text_density=features.text_density,
         element_count=features.element_count,
+        visual_hierarchy=(features.visual_hierarchy if include_visual else "balanced"),
+        hero_area_ratio=(features.hero_coverage if include_visual else 0),
+        whitespace_ratio=(features.whitespace if include_visual else 0),
+        text_area_ratio=(features.text_area_ratio if include_visual else 0),
+        decorative_area_ratio=(features.decorative_area_ratio if include_visual else 0),
+        typography_intent=(
+            (
+                "premium"
+                if any(
+                    tag.casefold() in {"premium", "luxury", "elegant"}
+                    for tag in metadata.style_tags
+                )
+                else features.typography_intent
+            )
+            if include_visual
+            else "balanced"
+        ),
+        visual_rhythm=(features.visual_rhythm if include_visual else "balanced"),
+        background_luminance=(features.background_luminance if include_visual else None),
     )

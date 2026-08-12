@@ -24,7 +24,13 @@ from training.inference.corel_compiler import compile_corel_operations
 from training.inference.generation_identity import fingerprint_checkpoint
 from training.inference.qwen3_planner import Qwen3PlannerSession
 from training.inference.rag import ReferenceGroundedDesignPipeline
-from training.retrieval import JsonlReferenceProvider
+from training.retrieval import (
+    HybridReferenceRetriever,
+    HybridRetrievalWeights,
+    JsonlReferenceProvider,
+    TransformersSiglip2Embedder,
+    VisualEmbeddingIndex,
+)
 from training.schemas.design import AssetSpec, DesignDocument
 from training.visual.composition import VISUAL_ENGINE_VERSION
 
@@ -74,6 +80,10 @@ class TrainedModelStatus(ServiceModel):
     generation_count: int = Field(ge=0)
     load_duration_seconds: float | None = Field(default=None, ge=0)
     load_error: str | None = None
+    planner_model: dict[str, Any] = Field(default_factory=dict)
+    visual_embedding_model: dict[str, Any] = Field(default_factory=dict)
+    structural_index: dict[str, Any] = Field(default_factory=dict)
+    visual_index: dict[str, Any] = Field(default_factory=dict)
 
 
 class TrainedDesignUnavailableError(RuntimeError):
@@ -95,6 +105,9 @@ class TrainedDesignServiceConfig:
     enabled: bool = True
     context_token_budget: int = 350
     max_new_tokens: int = 512
+    visual_index: Path | None = None
+    visual_config: Path | None = None
+    visual_enabled: bool = True
 
     @classmethod
     def from_environment(cls, repo_root: Path) -> "TrainedDesignServiceConfig":
@@ -106,6 +119,7 @@ class TrainedDesignServiceConfig:
             return (root / path).resolve() if not path.is_absolute() else path.resolve()
 
         enabled = os.getenv("DESIGN_AI_TRAINED_ENABLED", "auto").strip().casefold()
+        visual_enabled = os.getenv("DESIGN_AI_VISUAL_RAG_ENABLED", "auto").strip().casefold()
         return cls(
             repo_root=root,
             checkpoint=local_path(
@@ -131,6 +145,15 @@ class TrainedDesignServiceConfig:
             enabled=enabled not in {"0", "false", "off", "disabled"},
             context_token_budget=int(os.getenv("DESIGN_AI_CONTEXT_TOKEN_BUDGET", "350")),
             max_new_tokens=int(os.getenv("DESIGN_AI_MAX_NEW_TOKENS", "512")),
+            visual_index=local_path(
+                "DESIGN_AI_VISUAL_INDEX",
+                "training/artifacts/reference_corpora/design_v0_3_4_visual",
+            ),
+            visual_config=local_path(
+                "DESIGN_AI_VISUAL_RAG_CONFIG",
+                "training/config/retrieval/visual_rag_v034.json",
+            ),
+            visual_enabled=visual_enabled not in {"0", "false", "off", "disabled"},
         )
 
 
@@ -166,13 +189,18 @@ class TrainedDesignService:
         config: TrainedDesignServiceConfig,
         *,
         session_factory: SessionFactory = Qwen3PlannerSession,
+        visual_embedder_factory: SessionFactory = TransformersSiglip2Embedder,
     ) -> None:
         self.config = config
         self._session_factory = session_factory
+        self._visual_embedder_factory = visual_embedder_factory
         self._session: Any | None = None
+        self._visual_embedder: Any | None = None
+        self._visual_index: VisualEmbeddingIndex | None = None
         self._lock = threading.RLock()
         self._generation_count = 0
         self._load_error: str | None = None
+        self._visual_load_error: str | None = None
 
     @classmethod
     def from_environment(cls, repo_root: Path) -> "TrainedDesignService":
@@ -195,6 +223,27 @@ class TrainedDesignService:
             device = "unavailable"
         else:
             device = "cuda_required_not_loaded"
+        visual_configured = bool(
+            self.config.visual_enabled
+            and self.config.visual_index is not None
+            and self.config.visual_config is not None
+        )
+        visual_available = bool(
+            visual_configured
+            and self.config.visual_index is not None
+            and (self.config.visual_index / "index_manifest.json").is_file()
+            and self.config.visual_config is not None
+            and self.config.visual_config.is_file()
+            and self._visual_load_error is None
+        )
+        visual_embedding_config: dict[str, Any] = {}
+        if self.config.visual_config is not None and self.config.visual_config.is_file():
+            try:
+                visual_embedding_config = _read_json(self.config.visual_config).get(
+                    "embedding", {}
+                )
+            except (OSError, ValueError, TypeError):
+                visual_embedding_config = {}
         return TrainedModelStatus(
             configured=self.config.enabled,
             available=self._static_available() and self._load_error is None,
@@ -209,7 +258,96 @@ class TrainedDesignService:
                 float(self._session.load_duration_seconds) if loaded else None
             ),
             load_error=self._load_error,
+            planner_model={
+                "configured": self.config.enabled,
+                "available": self._static_available() and self._load_error is None,
+                "loaded": loaded,
+                "model_id": MODEL_ID,
+                "revision": MODEL_REVISION,
+            },
+            visual_embedding_model={
+                "configured": visual_configured,
+                "available": visual_available,
+                "loaded": self._visual_embedder is not None,
+                "model_id": getattr(
+                    self._visual_embedder,
+                    "model_id",
+                    visual_embedding_config.get("model_id"),
+                ),
+                "revision": getattr(
+                    self._visual_embedder,
+                    "revision",
+                    visual_embedding_config.get("revision"),
+                ),
+                "device": getattr(self._visual_embedder, "device", "not_loaded"),
+                "load_error": self._visual_load_error,
+            },
+            structural_index={
+                "configured": True,
+                "available": self.config.reference_index.is_file(),
+                "path": str(self.config.reference_index),
+            },
+            visual_index={
+                "configured": visual_configured,
+                "available": visual_available,
+                "loaded": self._visual_index is not None,
+                "path": str(self.config.visual_index) if self.config.visual_index else None,
+                "fingerprint": (
+                    self._visual_index.manifest.fingerprint
+                    if self._visual_index is not None
+                    else None
+                ),
+            },
         )
+
+    def _ensure_visual_retriever(
+        self,
+        provider: JsonlReferenceProvider,
+    ) -> HybridReferenceRetriever | None:
+        status = self.status()
+        if not status.visual_index.get("available"):
+            return None
+        if self._visual_index is not None and self._visual_embedder is not None:
+            return HybridReferenceRetriever(
+                provider,
+                visual_index=self._visual_index,
+                embedder=self._visual_embedder,
+                weights=self._visual_weights(),
+                mmr_lambda=self._visual_mmr_lambda(),
+            )
+        assert self.config.visual_index is not None
+        assert self.config.visual_config is not None
+        visual_config = _read_json(self.config.visual_config)
+        embedding = visual_config["embedding"]
+        try:
+            self._visual_index = VisualEmbeddingIndex(self.config.visual_index)
+            self._visual_embedder = self._visual_embedder_factory(
+                model_id=embedding["model_id"],
+                revision=embedding["revision"],
+                device="auto",
+            )
+        except Exception as exc:
+            self._visual_load_error = f"{type(exc).__name__}: {exc}"
+            self._visual_index = None
+            self._visual_embedder = None
+            return None
+        self._visual_load_error = None
+        return HybridReferenceRetriever(
+            provider,
+            visual_index=self._visual_index,
+            embedder=self._visual_embedder,
+            weights=self._visual_weights(),
+            mmr_lambda=self._visual_mmr_lambda(),
+        )
+
+    def _visual_weights(self) -> HybridRetrievalWeights:
+        assert self.config.visual_config is not None
+        config = _read_json(self.config.visual_config)
+        return HybridRetrievalWeights(**config["weights"])
+
+    def _visual_mmr_lambda(self) -> float:
+        assert self.config.visual_config is not None
+        return float(_read_json(self.config.visual_config)["mmr_lambda"])
 
     def _ensure_session(self) -> Any:
         if self._session is not None:
@@ -271,9 +409,11 @@ class TrainedDesignService:
                 weights=ScoreWeights.model_validate(score_config["weights"]),
                 aesthetic_critic=HeuristicAestheticCritic(),
             )
+            provider = JsonlReferenceProvider(self.config.reference_index)
+            hybrid_retriever = self._ensure_visual_retriever(provider)
             pipeline = ReferenceGroundedDesignPipeline(
                 base_generator=session,
-                provider=JsonlReferenceProvider(self.config.reference_index),
+                provider=provider,
                 scorer=scorer,
                 model_provenance={
                     "model_id": MODEL_ID,
@@ -288,6 +428,7 @@ class TrainedDesignService:
                 context_token_budget=self.config.context_token_budget,
                 visual_composition=True,
                 benchmark_mode=False,
+                reference_retriever=hybrid_retriever,
             )
             started = time.perf_counter()
             try:
@@ -327,6 +468,7 @@ class TrainedDesignService:
                     "reference_id": item.reference_id,
                     "score": item.score,
                     "match": item.match.model_dump(mode="json"),
+                    "retrieval": item.model_dump(mode="json"),
                 }
                 for item in result.retrieval
             ]

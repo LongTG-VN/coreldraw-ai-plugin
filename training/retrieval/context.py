@@ -38,7 +38,10 @@ def build_reference_context(
         candidate = selected + [result.summary]
         payload = {
             "instruction": REFERENCE_INSTRUCTION,
-            "references": [item.model_dump(exclude_none=True) for item in candidate],
+            "references": [
+                item.model_dump(exclude_none=True, exclude_defaults=True)
+                for item in candidate
+            ],
         }
         if estimate_reference_tokens(payload) > max_tokens:
             truncated = True
@@ -46,7 +49,10 @@ def build_reference_context(
         selected = candidate
     final_payload = {
         "instruction": REFERENCE_INSTRUCTION,
-        "references": [item.model_dump(exclude_none=True) for item in selected],
+        "references": [
+            item.model_dump(exclude_none=True, exclude_defaults=True)
+            for item in selected
+        ],
     }
     return ReferenceContextV1(
         instruction=REFERENCE_INSTRUCTION,

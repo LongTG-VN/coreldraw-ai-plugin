@@ -104,6 +104,7 @@ class ReferenceGroundedGenerator:
             "reference_context": self.context.model_dump(
                 mode="json",
                 exclude_none=True,
+                exclude_defaults=True,
             ),
         }
         return (
@@ -197,6 +198,7 @@ class ReferenceGroundedDesignPipeline:
         document_postprocessor: Callable[
             [Any, StructuredBriefV1], tuple[Any, dict[str, object]]
         ] | None = None,
+        reference_retriever: Any | None = None,
     ) -> None:
         if not 1 <= top_k <= 8:
             raise ValueError("reference top_k must be between 1 and 8")
@@ -213,6 +215,7 @@ class ReferenceGroundedDesignPipeline:
         self.visual_composition = visual_composition
         self.benchmark_mode = benchmark_mode
         self.document_postprocessor = document_postprocessor
+        self.reference_retriever = reference_retriever
 
     def run(
         self,
@@ -226,7 +229,8 @@ class ReferenceGroundedDesignPipeline:
     ) -> ReferenceGroundedRunResult:
         brief = analyze_brief(prompt, width=width_mm, height=height_mm)
         started = time.perf_counter()
-        retrieval = ReferenceRetriever(self.provider).retrieve_references(
+        retriever = self.reference_retriever or ReferenceRetriever(self.provider)
+        retrieval = retriever.retrieve_references(
             brief,
             top_k=self.top_k,
         )
@@ -311,6 +315,12 @@ class ReferenceGroundedDesignPipeline:
         )
 
         _write_json(run_dir / "brief.json", brief)
+        hybrid_diagnostics = getattr(retriever, "last_diagnostics", None)
+        if hybrid_diagnostics is None and hasattr(retriever, "retriever"):
+            hybrid_diagnostics = getattr(retriever.retriever, "last_diagnostics", None)
+        visual_index = getattr(retriever, "visual_index", None)
+        if visual_index is None and hasattr(retriever, "retriever"):
+            visual_index = getattr(retriever.retriever, "visual_index", None)
         _write_json(
             run_dir / "retrieval.json",
             {
@@ -323,6 +333,13 @@ class ReferenceGroundedDesignPipeline:
                 "context_estimated_tokens": context.estimated_tokens,
                 "context_truncated": context.truncated,
                 "results": [item.model_dump(mode="json") for item in retrieval],
+                "strategy": "hybrid_visual_rag" if hybrid_diagnostics else "structural_rag",
+                "hybrid_diagnostics": (
+                    hybrid_diagnostics.__dict__ if hybrid_diagnostics else None
+                ),
+                "visual_index_fingerprint": (
+                    visual_index.manifest.fingerprint if visual_index is not None else None
+                ),
                 "license_class": "research_only",
                 "commercial_allowed": False,
             },

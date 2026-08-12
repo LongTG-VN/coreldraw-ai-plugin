@@ -79,6 +79,24 @@ def _record_similarity(first: ReferenceRecordV1, second: ReferenceRecordV1) -> f
     )
 
 
+def score_reference(
+    brief: StructuredBriefV1,
+    record: ReferenceRecordV1,
+    *,
+    weights: RetrievalWeights | None = None,
+) -> tuple[dict[str, float], float]:
+    """Return explainable structural components without candidate hard-filtering."""
+
+    return _matches(brief, record, weights or RetrievalWeights())
+
+
+def reference_structural_similarity(
+    first: ReferenceRecordV1,
+    second: ReferenceRecordV1,
+) -> float:
+    return _record_similarity(first, second)
+
+
 class ReferenceRetriever:
     def __init__(
         self,

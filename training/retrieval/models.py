@@ -66,6 +66,18 @@ class ReferenceFeaturesV1(StrictRetrievalModel):
     dominant_colors: list[str] = Field(default_factory=list, max_length=12)
     aspect_ratio: FiniteFloat = Field(gt=0, le=100)
     text_density: TextDensity
+    text_area_ratio: FiniteFloat = Field(default=0, ge=0, le=1)
+    decorative_area_ratio: FiniteFloat = Field(default=0, ge=0, le=1)
+    background_luminance: FiniteFloat | None = Field(default=None, ge=0, le=1)
+    visual_hierarchy: Literal["headline_dominant", "image_dominant", "balanced"] = (
+        "balanced"
+    )
+    typography_intent: Literal[
+        "display_heavy", "editorial", "minimal", "condensed", "premium", "balanced"
+    ] = "balanced"
+    visual_rhythm: Literal[
+        "large_small_large", "stacked", "two_column", "grid", "balanced"
+    ] = "balanced"
 
 
 class ReferenceMetadataV1(StrictRetrievalModel):
@@ -126,6 +138,20 @@ class ReferenceDesignSummaryV1(StrictRetrievalModel):
     cta: PlacementSummaryV1 | None = None
     text_density: TextDensity
     element_count: int = Field(ge=0)
+    visual_hierarchy: Literal["headline_dominant", "image_dominant", "balanced"] = (
+        "balanced"
+    )
+    hero_area_ratio: FiniteFloat = Field(default=0, ge=0, le=1)
+    whitespace_ratio: FiniteFloat = Field(default=0, ge=0, le=1)
+    text_area_ratio: FiniteFloat = Field(default=0, ge=0, le=1)
+    decorative_area_ratio: FiniteFloat = Field(default=0, ge=0, le=1)
+    typography_intent: Literal[
+        "display_heavy", "editorial", "minimal", "condensed", "premium", "balanced"
+    ] = "balanced"
+    visual_rhythm: Literal[
+        "large_small_large", "stacked", "two_column", "grid", "balanced"
+    ] = "balanced"
+    background_luminance: FiniteFloat | None = Field(default=None, ge=0, le=1)
 
 
 class ReferenceRecordV1(StrictRetrievalModel):
@@ -166,3 +192,19 @@ class ReferenceContextV1(StrictRetrievalModel):
     references: list[ReferenceDesignSummaryV1]
     estimated_tokens: int = Field(ge=0)
     truncated: bool
+
+
+class HybridReferenceRetrievalResultV1(ReferenceRetrievalResultV1):
+    structural_score: FiniteFloat = Field(ge=0, le=1)
+    visual_text_score: FiniteFloat = Field(ge=0, le=1)
+    visual_asset_score: FiniteFloat | None = Field(default=None, ge=0, le=1)
+    hybrid_score: FiniteFloat = Field(ge=0, le=1)
+    mmr_score: FiniteFloat = Field(ge=-1, le=1)
+    visual_diversity: FiniteFloat = Field(ge=0, le=1)
+    structural_diversity: FiniteFloat = Field(ge=0, le=1)
+    source_diversity: FiniteFloat = Field(ge=0, le=1)
+    embedding_model: str = Field(min_length=1, max_length=300)
+    embedding_revision: str = Field(min_length=1, max_length=200)
+    visual_index_id: str = Field(min_length=1, max_length=200)
+    template_family: str = Field(min_length=1, max_length=300)
+    excluded_leakage_candidates: list[dict[str, Any]] = Field(default_factory=list)
