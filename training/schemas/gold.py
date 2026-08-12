@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
-from training.schemas.design import ColorSpec, NormalizedBoundingBox
+from training.schemas.design import NormalizedBoundingBox
 
 
 SemanticRole = Literal[
@@ -29,7 +30,6 @@ SemanticRole = Literal[
     "DECORATION",
     "BACKGROUND",
 ]
-
 RelationshipType = Literal[
     "ALIGN_LEFT",
     "ALIGN_CENTER",
@@ -43,6 +43,13 @@ RelationshipType = Literal[
     "OVERLAP_ALLOWED",
     "MAINTAIN_GAP",
     "MAINTAIN_RATIO",
+]
+GoldStatus = Literal[
+    "PROVISIONAL",
+    "PROVISIONAL_REAL_REFERENCE",
+    "HUMAN_CERTIFIED",
+    "HUMAN_CERTIFIED_RESEARCH",
+    "REJECTED",
 ]
 
 
@@ -77,9 +84,9 @@ class GoldTypographyRoleV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: SemanticRole
-    family_class: str = "neutral_sans"  # e.g., display_serif, condensed_sans, neutral_sans
+    family_class: str = "neutral_sans"
     weight: int = 400
-    relative_scale: float = 1.0  # Font size ratio relative to body font size
+    relative_scale: float = 1.0
     alignment: Literal["left", "center", "right", "justify"] = "center"
     uppercase: bool = False
     max_lines: int = 3
@@ -124,15 +131,20 @@ class GoldSpacingGrammarV1(BaseModel):
 
 
 class GoldDesignGrammarV1(BaseModel):
-    """Reusable structured composition grammar extracted from a Gold reference design."""
+    """Reusable structured composition grammar extracted from a reference design.
+
+    Provenance is intentionally fail-closed. A grammar is never assumed to be
+    project-owned or commercially usable merely because it was constructed by
+    project code. Callers must bind explicit source/license metadata.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     grammar_id: str
     grammar_name: str
     category: str
-    canvas_aspect_ratio: float  # width_mm / height_mm
-    gold_status: Literal["PROVISIONAL", "HUMAN_CERTIFIED"] = "PROVISIONAL"
+    canvas_aspect_ratio: float
+    gold_status: GoldStatus = "PROVISIONAL"
     slots: list[GoldSlotV1]
     relationships: list[GoldRelationshipV1] = Field(default_factory=list)
     typography_grammar: dict[str, GoldTypographyRoleV1] = Field(default_factory=dict)
@@ -141,8 +153,9 @@ class GoldDesignGrammarV1(BaseModel):
     spacing_grammar: GoldSpacingGrammarV1 = Field(default_factory=GoldSpacingGrammarV1)
     provenance: dict[str, Any] = Field(
         default_factory=lambda: {
-            "license_class": "CC0_or_project_owned",
-            "commercial_allowed": True,
-            "source": "project_gold_archive",
+            "license_class": "UNKNOWN",
+            "commercial_allowed": False,
+            "project_owned": False,
+            "source": "UNBOUND",
         }
     )
