@@ -2,114 +2,218 @@
 
 ## Purpose
 
-This branch is a **freeze/stabilization checkpoint** created after the Antigravity research experiments and before Codex resumes work.
+This branch is the **safe handoff checkpoint** after the Antigravity research experiments and before Codex resumes work.
 
-Do not start new research milestones from this branch until the known issues below are reviewed. The goal is to preserve working Corel/API infrastructure while quarantining research claims that were not adequately validated.
+Do not start a new aesthetic/research milestone from this branch. The purpose of the branch is to preserve the verified Corel/API foundation while making later experimental code fail closed instead of silently fabricating evidence.
 
 ## Branch
 
-`stabilize/pre-codex-return-20260812`
-
-Base research commit:
-
-`028db5ead17dd2c3d54c5660ec85c5052f372d5c`
-
-Original research branch remains untouched:
-
-`agent/codex-training-bootstrap`
+- Stabilization branch: `stabilize/pre-codex-return-20260812`
+- Base research commit: `028db5ead17dd2c3d54c5660ec85c5052f372d5c`
+- Original research branch remains untouched: `agent/codex-training-bootstrap`
+- Draft PR: `#5 [freeze] Pre-Codex stabilization checkpoint`
 
 ## Keep / Treat as Stable
 
-The following areas were already verified before the later research experiments and should be preserved unless a regression is demonstrated:
+Preserve these areas unless a concrete regression is demonstrated:
 
 - Corel Design API control path
 - transaction / rollback behavior
-- editable CDR save / reopen via the real Corel API path
+- real editable CDR save / reopen through the Corel API path
 - PNG/PDF export through Corel
-- DesignDocument / schema infrastructure
+- `DesignDocument` and schema infrastructure
 - v0.3.3 Asset-Aware Composition as the last clearly successful design-quality milestone
-- human review tooling and queue infrastructure
-- Qwen3-1.7B local planner as an offline fallback; do not remove it
+- human-review tooling and historical queues
+- Qwen3-1.7B as the offline/local fallback planner
 
-## Research Freeze
-
-Do **not** continue or claim success for the following until Codex re-audits them:
+## Frozen / Do Not Resume Automatically
 
 - v0.3.4 Hybrid Visual RAG — failed experiment
 - v0.3.5 Vision Critic / Self-Refine — failed experiment
-- Antigravity-vs-Qwen planner shootout — inconclusive / invalid historical runs exist
-- Phase 1.3 manual "Gold" grammars — manually authored templates, not extracted Gold references
-- Phase 1.3b GenPoster "Real Gold" pilot — quarantined pending source-quality, license, renderer, and real-CDR review
+- Antigravity-vs-Qwen planner shootout — inconclusive; invalid historical runs exist
+- Phase 1.3 manual "Gold" grammars — manually authored layout fixtures, not Gold references
+- Phase 1.3b GenPoster reference pilot — research-only and rejected as a Gold-quality source set
+- preference training — not ready
+- private company archive ingestion — not started
 
-## Known Phase 1.3b Problems
+## Stabilization Hardening Completed
 
-### 1. GenPoster licensing metadata is currently wrong
+### 1. Gold provenance now fails closed
 
-`training/gold/real_pipeline.py` and `training/evaluation/real_gold_pilot.py` currently use values such as:
+`training/schemas/gold.py`
 
-- `license_class = "CC0_or_project_owned"`
-- `project_owned = True`
-- `commercial_allowed = True`
+Unbound grammars now default to:
 
-for samples discovered from the GenPoster research dataset.
+```text
+license_class: UNKNOWN
+commercial_allowed: false
+project_owned: false
+source: UNBOUND
+```
 
-These values must **not** be trusted. The GenPoster research source was previously treated as non-commercial/research-only in this project. Until Codex verifies the exact source/license record, treat all Phase 1.3b GenPoster-derived grammars and outputs as:
+No grammar is automatically treated as commercially usable or project-owned merely because project code created it.
 
-- research-only
-- `commercial_allowed = false`
-- not project-owned
+### 2. Extractor inherits source rights instead of inventing them
 
-### 2. Source quality gate failed visually
+`training/gold/extractor.py`
 
-The generated source contact sheet showed severe typography/layout problems, including narrow character-by-character wrapping, overlap, broken hierarchy, and oversized glyphs.
+The extractor now inherits:
 
-The current source set is **not human-certified Gold** and should not be used to claim aesthetic improvement.
+- source name/split/upstream ID,
+- license class,
+- commercial permission,
+- explicit `project_owned` metadata.
 
-Before future Gold extraction:
+It also avoids unsafe font-family assumptions and no longer hard-codes permissive provenance.
 
-1. render the source faithfully,
-2. human-review the source itself,
-3. only extract from approved references.
+### 3. GenPoster is locked to research-only provenance
 
-### 3. Phase 1.3b runner writes a fake `.cdr` placeholder
+`training/gold/real_pipeline.py`
 
-`training/evaluation/real_gold_pilot.py` currently creates `output.cdr` with synthetic bytes instead of invoking the real Corel save/export path.
+For this project:
 
-Therefore Phase 1.3b's generated `output.cdr` files are **not evidence of editable CorelDRAW output**.
+```text
+license_class: CC-BY-NC-4.0
+commercial_allowed: false
+project_owned: false
+```
 
-Do not reuse this placeholder mechanism in future milestones. A real CDR claim requires the verified Design API/Corel round-trip path.
+These values must not be widened by downstream code without a new source/license audit.
 
-### 4. Baseline is a fixture planner
+### 4. Automatic keyword-to-Gold discovery has been disabled
 
-Phase 1.3b currently uses `FixtureQwenPlanner()` as its baseline. It must not be described as a genuine current Qwen inference or as a clean v0.3.3 model comparison without further validation.
+The previous implementation selected SALE/SPA candidates with broad text keywords. That path is no longer allowed for Gold extraction.
 
-### 5. Provenance audit is too weak
+The stabilized pipeline separates:
 
-The current provenance audit mainly checks that IDs/hashes are non-empty and performs a narrow literal-content check. It does not fully prove:
+```text
+dataset candidate discovery
+→ human source review
+→ explicit approved-source manifest
+→ extraction
+```
 
-- source hash recomputation against the original dataset entry,
-- high visual quality,
-- correct renderer fidelity,
-- commercial rights,
-- real Corel CDR creation.
+`build_real_gold_library()` now requires exact approved source IDs from a human-curated manifest. Missing/unapproved manifests block the pipeline instead of falling back to heuristic selection.
 
-`REAL_GOLD_PIPELINE_VERIFIED` should therefore be treated as a historical implementation status, **not** as proof that the Gold hypothesis succeeded.
+### 5. Source approval is an explicit quality gate
 
-### 6. Source category discovery is heuristic and too broad
+A real-reference manifest entry must contain:
 
-The SPA discovery keywords include broad terms such as `lorem`, `fashion`, `design`, `art`, and `style`, which can select unrelated layouts. Future source selection should require explicit approved source IDs or a human-curated manifest.
+- `source_id`
+- exact dataset `upstream_id`
+- category
+- `approved: true`
+- `human_quality_status: APPROVED`
 
-### 7. CI depended on an ignored local dataset
+Without these fields the real-reference path stops.
 
-The Phase 1.3b tests directly required:
+This prevents another random/rejected source contact sheet from being treated as Gold.
 
-`training/data/research/genposter_smoke_100/train.jsonl`
+### 6. Fake `.cdr` generation has been removed
 
-which is absent on GitHub-hosted runners. The stabilization branch changes these integration-style tests to skip when the optional dataset is unavailable. They must later be refactored to use explicit fixtures or a separate integration test target.
+Both:
 
-## Current Safe Research Status
+- `training/evaluation/gold_grammar_pilot.py`
+- `training/evaluation/real_gold_pilot.py`
 
-Use these labels until Codex returns:
+previously wrote synthetic bytes to a file named `output.cdr`.
+
+That mechanism has been removed.
+
+Offline research runners now emit:
+
+```text
+corel_operations.json
+cdr_request.json
+```
+
+with:
+
+```text
+status: NOT_GENERATED_REQUIRES_REAL_COREL_API
+real_cdr_verified: false
+```
+
+A real `.cdr` claim now requires execution through the previously verified Windows/Corel Design API path.
+
+### 7. Manual Phase 1.3 grammars are quarantined as fixtures
+
+The 15 manually authored grammars are still useful for:
+
+- schema regression,
+- bounded adaptation regression,
+- Corel operation compilation,
+- contact-sheet tooling.
+
+But the Phase 1.3 runner now reports:
+
+```text
+STRUCTURED_GRAMMAR_ADAPTATION_PILOT_ONLY
+REGRESSION_FIXTURE_ONLY
+human_review_ready: false
+real_gold_reference_count: 0
+real_cdr_verified: false
+commercial_allowed: false
+```
+
+It no longer creates a human-preference queue.
+
+### 8. FixtureQwenPlanner is no longer silently presented as a real baseline
+
+The manual pilot keeps `FixtureQwenPlanner` only for regression context and labels it explicitly as a fixture.
+
+The real-reference pilot accepts an optional baseline planner. If the baseline is a fixture, it is not eligible for a real human baseline claim.
+
+### 9. Gold adaptation metrics no longer fabricate perfect scores
+
+`training/gold/adapter.py`
+
+The old adapter hard-coded values such as:
+
+```text
+alignment_preservation_rate = 1.0
+spacing_preservation_rate = 1.0
+hierarchy_preservation_rate = 1.0
+grammar_deviation_score = 0.05
+```
+
+The stabilized adapter:
+
+- computes slot-fill and relationship preservation from actual filled slots,
+- reports exact normalized-geometry deviation as `0.0` when geometry is copied unchanged,
+- reports unimplemented independent metrics as `null` instead of inventing `1.0`,
+- does not fake a logo by rendering the business name into a LOGO slot.
+
+### 10. Tests are hermetic
+
+`tests/test_real_gold_grammar.py` now builds a small temporary dataset and approved manifest fixture.
+
+GitHub CI no longer depends on ignored local GenPoster files and now verifies:
+
+- source discovery does not auto-approve,
+- missing/unapproved manifests fail closed,
+- GenPoster rights remain research-only,
+- exact approved-source extraction works,
+- no fake `.cdr` is written,
+- pilot blocks before generation without source approval.
+
+`tests/test_research_integrity_guards.py` prevents the known fake-CDR magic headers and permissive GenPoster rights from being reintroduced.
+
+## Historical Artifacts
+
+Do not delete historical Antigravity artifacts. They are useful as negative experiments and implementation history.
+
+But do not interpret old files containing labels such as:
+
+```text
+REAL_GOLD_PIPELINE_VERIFIED
+commercial_allowed: true
+output.cdr
+```
+
+as current truth. Historical artifacts may predate the stabilization fixes above.
+
+## Current Safe Status
 
 ```text
 corel_api_stable: true
@@ -117,28 +221,48 @@ real_corel_cdr_roundtrip_previously_verified: true
 v0_3_3_asset_aware_stable: true
 qwen_fallback_preserved: true
 
-phase_1_3_manual_gold_valid_as_gold: false
-phase_1_3b_genposter_gold_quality_approved: false
-phase_1_3b_commercial_allowed: false
-phase_1_3b_real_cdr_verified: false
-phase_1_3b_ready_for_human_adaptation_review: false
+v0_3_4_visual_rag_enabled: false
+v0_3_5_vision_critic_enabled: false
+
+manual_gold_is_real_gold: false
+manual_gold_human_review_ready: false
+
+real_gold_requires_approved_manifest: true
+genposter_commercial_allowed: false
+genposter_project_owned: false
+real_gold_source_quality_approved: false
+real_gold_real_cdr_verified: false
 
 preference_training_ready: false
 production_ready: false
 research_frozen_for_codex_review: true
 ```
 
-## Codex Resume Checklist
+## Codex Resume — Recommended Order
 
-When Codex has token budget again, start from this stabilization branch and do the following before any new aesthetic milestone:
+When Codex has budget again:
 
-1. run full tests and CI and establish a clean green baseline;
-2. fix GenPoster license/provenance metadata to exact, conservative values;
-3. remove/rename the fake `.cdr` placeholder path and require real Corel integration for CDR claims;
-4. replace dataset-dependent unit tests with small committed fixtures or a separate optional integration suite;
-5. quarantine or tighten the broad source-discovery heuristics;
-6. downgrade historical Phase 1.3b success flags to reflect source-quality and provenance limitations;
-7. only then resume Gold Design work using a tiny human-approved source set, preferably company-owned CDR designs.
+1. check out this stabilization branch and verify the latest CI matrix is green;
+2. audit the diff in Draft PR #5 before merging anything back to the research branch;
+3. preserve the verified Corel/API and v0.3.3 path;
+4. decide whether to keep or further simplify the quarantined Phase 1.3/1.3b research runners;
+5. build a tiny source-curation workflow for **company-owned** CDR files;
+6. use only 5–10 explicitly human-approved company designs for the next Gold extractor test;
+7. require real Corel API save/reopen for every future `.cdr` claim;
+8. only after candidate quality improves should preference training resume.
+
+## Best Next Research Input
+
+Do not scan the full private archive.
+
+Preferred next input is a tiny curated set such as:
+
+```text
+5 good SALE CDR files
+5 good SPA CDR files
+```
+
+Each source should be something a human would accept as a quality target before the extractor sees it.
 
 ## Stop Rule
 
@@ -148,8 +272,8 @@ Until Codex resumes:
 - no new VLM/RAG experiments,
 - no preference training,
 - no large candidate generation,
-- no private archive ingestion,
+- no private archive bulk ingestion,
 - no automatic Gold promotion,
 - no research-success claims from Antigravity alone.
 
-This branch exists to be boring, reproducible, and safe.
+This branch should remain boring, reproducible, conservative, and easy for Codex to audit.
