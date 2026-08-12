@@ -1,5 +1,9 @@
 # CorelDRAW AI Template Plugin
 
+> New agent/operator: start with
+> [`docs/ANTIGRAVITY_HANDOFF.md`](docs/ANTIGRAVITY_HANDOFF.md), then read the
+> linked agent rules, API reference, and local Corel runbook.
+
 Local Windows service that lets a CorelDRAW Docker UI or AI Agent automate
 CorelDRAW through Win32 COM. The current agent API adds canvas inspection,
 layout composition, typography, z-order, asset fitting/PowerClip and iterative
@@ -214,6 +218,10 @@ HTML Docker requires an `AppUI.xslt` matching the exact CorelDRAW version; see
 | `POST` | `/api/v1/corel/text/set` | Replace template text |
 | `POST` | `/api/v1/corel/image/place-in-slot` | Fit bitmap to named slot |
 | `POST` | `/api/v1/corel/export` | Export PDF or PNG |
+| `POST` | `/api/v1/design/save` | Safely save an already named editable CDR |
+| `POST` | `/api/v1/design/save-as` | Safely save-as CDR; no overwrite by default |
+| `POST` | `/api/v1/design/open` | Safely open an existing CDR |
+| `POST` | `/api/v1/design/export` | Safely export PNG/PDF; no overwrite by default |
 | `GET` | `/api/v1/design/snapshot` | Inspect active page and objects |
 | `POST` | `/api/v1/design/objects/batch-transform` | Batch layout transforms |
 | `POST` | `/api/v1/design/object/typography` | Edit text/font/size |

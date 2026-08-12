@@ -83,12 +83,17 @@ class ExtendedCorelDrawBridge:
                 doc.PublishToPDF(str(path))
             elif export_format == "png":
                 options = app.CreateStructExportOptions()
+                palette_options = app.CreateStructPaletteOptions()
                 options.ImageType = CDR_RGB_COLOR_IMAGE
                 options.Overwrite = True
                 options.ResolutionX = dpi
                 options.ResolutionY = dpi
                 export_filter = doc.ExportEx(
-                    str(path), CDR_PNG, CDR_CURRENT_PAGE, options
+                    str(path),
+                    CDR_PNG,
+                    CDR_CURRENT_PAGE,
+                    options,
+                    palette_options,
                 )
                 export_filter.Finish()
             else:

@@ -1,0 +1,80 @@
+{
+  "schema_version": "1.0",
+  "project": "coreldraw-ai-plugin",
+  "branch": "agent/codex-training-bootstrap",
+  "git": {
+    "starting_sha": "5955dd246b854b13374519d9f9055e266400230e",
+    "final_sha": "HEAD",
+    "final_sha_resolution": "git rev-parse HEAD",
+    "note": "HEAD is intentional because a commit cannot embed its own final SHA"
+  },
+  "status": {
+    "stable_design_pipeline": "v0.3.3",
+    "visual_rag": "failed_research_disabled_by_default",
+    "vision_critic": "failed_research_not_in_default_runtime",
+    "human_review": "waiting_for_category_pilot_human_review",
+    "preference_training_ready": false,
+    "preference_model_trained": false,
+    "v0_4_complete": false,
+    "production_ready": false,
+    "commercial_allowed": false
+  },
+  "corel": {
+    "editable_cdr_target": true,
+    "create_document_supported": true,
+    "editable_mutation_supported": true,
+    "save_supported": true,
+    "save_as_supported": true,
+    "open_supported": true,
+    "preview_supported": true,
+    "pdf_export_supported": true,
+    "undo_supported": true,
+    "transaction_supported": true,
+    "real_smoke": {
+      "status": "passed",
+      "corel_version": "22.0.0.412",
+      "text_editability_verified": true,
+      "shape_editability_verified": true,
+      "cdr_sha256": "ea215c9d68566a4a6a2801950e316b55792fb1e152ad96bfc35d09cfe77d0edc",
+      "report": "training/artifacts/handoff/corel_roundtrip_20260812/roundtrip_report_v2.json",
+      "artifact_committed": false
+    }
+  },
+  "agent": {
+    "preferred_control": "design_api",
+    "direct_com_default_allowed": false,
+    "gui_automation_default_allowed": false,
+    "business_data_invention_allowed": false,
+    "safe_loop": [
+      "snapshot",
+      "transaction",
+      "check",
+      "render_preview",
+      "bounded_refine_or_undo",
+      "save_cdr"
+    ]
+  },
+  "services": {
+    "corel_api": {
+      "command": "python main.py",
+      "url": "http://127.0.0.1:8001"
+    },
+    "phase1_2_review": {
+      "command": "python -m training.tools.human_review_server --queue v04_phase1_2_category_pilot --port 8004",
+      "url": "http://127.0.0.1:8004/review"
+    }
+  },
+  "models": {
+    "fallback_planner": "Qwen/Qwen3-1.7B",
+    "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+    "checkpoint_convention": "training/artifacts/runs/20260809_qwen3_1_7b_smoke/checkpoint-5",
+    "research_only": true,
+    "commercial_allowed": false
+  },
+  "read_first": [
+    "docs/ANTIGRAVITY_HANDOFF.md",
+    "docs/ANTIGRAVITY_DESIGN_AGENT_RULES.md",
+    "docs/DESIGN_API_REFERENCE.md",
+    "docs/LOCAL_COREL_RUNBOOK.md"
+  ]
+}

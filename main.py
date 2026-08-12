@@ -14,6 +14,7 @@ from starlette.requests import Request
 
 from corel_bridge import CorelDrawBridgeError, corel_bridge
 from design_bridge import DesignBridge
+from document_io import document_io
 from extended_bridge import extended_bridge
 from template_engine import TemplateEngine, TemplateRegistry, TemplateRegistryError
 from template_models import MenuRenderRequest
@@ -118,6 +119,22 @@ class SaveDocumentRequest(BaseModel):
 
 class OpenDocumentRequest(BaseModel):
     file_path: str = Field(min_length=1, max_length=4_096)
+
+
+class SafeDocumentPathRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=4_096)
+    overwrite: bool = False
+
+
+class SafeOpenDocumentRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=4_096)
+
+
+class SafeExportRequest(BaseModel):
+    format: Literal["pdf", "png"]
+    path: str = Field(min_length=1, max_length=4_096)
+    dpi: int = Field(default=300, ge=72, le=1_200)
+    overwrite: bool = False
 
 
 class SetTextRequest(BaseModel):
@@ -550,6 +567,37 @@ def design_render_preview(req: PreviewRequest) -> dict[str, object]:
         "format": "png",
         "file_path": path,
         "dpi": req.dpi,
+    }
+
+
+@app.post("/api/v1/design/save")
+def design_save() -> dict[str, object]:
+    return {"status": "success", **document_io.save_current()}
+
+
+@app.post("/api/v1/design/save-as")
+def design_save_as(req: SafeDocumentPathRequest) -> dict[str, object]:
+    return {
+        "status": "success",
+        **document_io.save_as_cdr(req.path, overwrite=req.overwrite),
+    }
+
+
+@app.post("/api/v1/design/open")
+def design_open(req: SafeOpenDocumentRequest) -> dict[str, object]:
+    return {"status": "success", **document_io.open_cdr(req.path)}
+
+
+@app.post("/api/v1/design/export")
+def design_export(req: SafeExportRequest) -> dict[str, object]:
+    return {
+        "status": "success",
+        **document_io.export(
+            req.path,
+            req.format,
+            dpi=req.dpi,
+            overwrite=req.overwrite,
+        ),
     }
 
 

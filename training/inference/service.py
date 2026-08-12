@@ -107,7 +107,9 @@ class TrainedDesignServiceConfig:
     max_new_tokens: int = 512
     visual_index: Path | None = None
     visual_config: Path | None = None
-    visual_enabled: bool = True
+    # v0.3.4 failed its retrieval-quality gate. Keep the implementation for
+    # research ablations, but require an explicit opt-in at runtime.
+    visual_enabled: bool = False
 
     @classmethod
     def from_environment(cls, repo_root: Path) -> "TrainedDesignServiceConfig":
@@ -119,7 +121,9 @@ class TrainedDesignServiceConfig:
             return (root / path).resolve() if not path.is_absolute() else path.resolve()
 
         enabled = os.getenv("DESIGN_AI_TRAINED_ENABLED", "auto").strip().casefold()
-        visual_enabled = os.getenv("DESIGN_AI_VISUAL_RAG_ENABLED", "auto").strip().casefold()
+        visual_enabled = os.getenv(
+            "DESIGN_AI_VISUAL_RAG_ENABLED", "false"
+        ).strip().casefold()
         return cls(
             repo_root=root,
             checkpoint=local_path(

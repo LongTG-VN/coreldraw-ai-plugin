@@ -236,6 +236,18 @@ def test_visual_runtime_status_is_lazy_and_independent_from_planner(
     assert status.visual_index["available"] is True
 
 
+def test_failed_visual_rag_requires_explicit_environment_opt_in(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("DESIGN_AI_VISUAL_RAG_ENABLED", raising=False)
+    config = TrainedDesignServiceConfig.from_environment(tmp_path)
+    assert config.visual_enabled is False
+
+    monkeypatch.setenv("DESIGN_AI_VISUAL_RAG_ENABLED", "true")
+    opted_in = TrainedDesignServiceConfig.from_environment(tmp_path)
+    assert opted_in.visual_enabled is True
+
+
 def test_service_loads_once_reuses_session_and_writes_manifest(tmp_path: Path) -> None:
     sessions: list[FakeSession] = []
 

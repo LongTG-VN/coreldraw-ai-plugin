@@ -38,6 +38,12 @@ The API never accepts arbitrary checkpoint or index paths from the request body.
 | `DESIGN_AI_RUNTIME_ARTIFACT_ROOT` | `training/artifacts/runtime/trained` |
 | `DESIGN_AI_CONTEXT_TOKEN_BUDGET` | `350` |
 | `DESIGN_AI_MAX_NEW_TOKENS` | `512` |
+| `DESIGN_AI_VISUAL_RAG_ENABLED` | `false` (failed v0.3.4 research path; explicit opt-in only) |
+
+The v0.3.4 visual retriever is preserved for controlled ablations but is not
+enabled by default because it failed its frozen quality gates. The v0.3.5
+vision critic is a standalone research tool and is also not part of this
+runtime path.
 
 ## Requests
 
