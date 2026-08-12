@@ -2,7 +2,22 @@
 
 Bạn không cần sửa JSON và không cần chạy model khi chấm. Candidate đã được tạo và kiểm tra kỹ thuật trước khi vào hàng đợi.
 
-## Pilot Phase 1.1 — ưu tiên chấm trước
+## Pilot Phase 1.2 — ưu tiên chấm trước
+
+Phase 1.2 chỉ chứa ba category yếu nhất theo review thật: SALE, SIGNAGE và SPA.
+Mở đúng queue tách biệt bằng lệnh:
+
+```powershell
+cd D:\codex\coreldraw-ai-plugin
+python -m training.tools.human_review_server --queue v04_phase1_2_category_pilot --port 8004
+```
+
+Mở `http://127.0.0.1:8004/review`. Queue có 12 so sánh mù; version,
+quality-floor metrics và nhãn cũ/mới đều bị ẩn trong lúc chấm. Nên nhập điểm
+`Chất lượng tổng thể` 1–10 để kiểm tra gate Phase 1.2, nhưng trường này không bắt
+buộc.
+
+## Pilot Phase 1.1 — đã hoàn tất vòng chẩn đoán
 
 Việc chấm pool cũ đang tạm dừng vì phản hồi chẩn đoán chỉ khoảng 4/10. Mở riêng pilot đã harden bằng lệnh:
 

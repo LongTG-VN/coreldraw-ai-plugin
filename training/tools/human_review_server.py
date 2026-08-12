@@ -11,13 +11,32 @@ from training.preference.v04.review_app import create_review_app
 from training.preference.v04.store import ReviewStore
 
 
+def resolve_queue_path(queue: str) -> Path:
+    """Resolve only explicit local aliases; arbitrary paths remain explicit."""
+
+    aliases = {
+        "v04_phase1_1_pilot": Path(
+            "training/artifacts/preference/v0_4_phase1_1_candidate_hardening/"
+            "review_queue/review_queue.jsonl"
+        ),
+        "v04_phase1_2_category_pilot": Path(
+            "training/artifacts/preference/v0_4_phase1_2_category_hardening/"
+            "review_queue/review_queue.jsonl"
+        ),
+    }
+    return aliases.get(queue, Path(queue))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=Path("training/data/human_preferences/v0_4"))
     parser.add_argument(
         "--queue",
         default="training/artifacts/preference/v0_4_initial_pool/review_queue/review_queue.jsonl",
-        help="Queue path or the alias 'v04_phase1_1_pilot'.",
+        help=(
+            "Queue path or alias 'v04_phase1_1_pilot' / "
+            "'v04_phase1_2_category_pilot'."
+        ),
     )
     parser.add_argument(
         "--artifact-root", type=Path, action="append",
@@ -31,11 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    queue = (
-        Path("training/artifacts/preference/v0_4_phase1_1_candidate_hardening/review_queue/review_queue.jsonl")
-        if args.queue == "v04_phase1_1_pilot"
-        else Path(args.queue)
-    )
+    queue = resolve_queue_path(args.queue)
     store = ReviewStore(data_root=args.data_root, queue_path=queue, approved_roots=args.artifact_root)
     app = create_review_app(store)
     print(f"Open:\nhttp://127.0.0.1:{args.port}/review")
