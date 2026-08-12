@@ -1,4 +1,9 @@
-"""Real Gold Grammar Extraction and Pipeline Engine for Design AI v0.4 Phase 1.3b."""
+"""Real-reference Gold Grammar extraction with fail-closed provenance.
+
+This module intentionally separates *source discovery* from *source approval*.
+Dataset rows are never promoted to Gold references by keyword heuristics. A source
+must be listed in an explicit human-curated approval manifest before extraction.
+"""
 
 from __future__ import annotations
 
@@ -16,96 +21,235 @@ from training.schemas.design import (
     ColorSpec,
     DesignDocument,
     DesignElement,
-    NormalizedBoundingBox,
     SourceSpec,
     TextSpec,
     VisualSpec,
     normalize_bbox,
 )
-from training.schemas.gold import GoldDesignGrammarV1, SemanticRole
+from training.schemas.gold import GoldDesignGrammarV1
 
 
 REAL_GOLD_DIR = Path("training/data/gold_designs/real_v1")
+DEFAULT_DATASET_PATH = Path("training/data/research/genposter_smoke_100/train.jsonl")
+DEFAULT_APPROVED_MANIFEST_PATH = Path("training/data/gold_designs/approved_sources_v1.json")
+
+# GenPoster100K is research-only in this project. Never widen these values from
+# a filename, local copy, or project ingestion step.
+GENPOSTER_LICENSE_CLASS = "CC-BY-NC-4.0"
+GENPOSTER_COMMERCIAL_ALLOWED = False
+GENPOSTER_PROJECT_OWNED = False
 
 
-def load_real_sources_from_dataset() -> dict[str, list[tuple[str, dict[str, Any]]]]:
-    """Discover real source design entries from the project's GenPoster dataset."""
-    jsonl_path = Path("training/data/research/genposter_smoke_100/train.jsonl")
-    if not jsonl_path.exists():
-        raise FileNotFoundError(f"Real source dataset file not found: {jsonl_path}")
+class GoldSourceApprovalRequired(RuntimeError):
+    """Raised when a real-reference extraction is attempted without human-approved IDs."""
 
-    sale_sources: list[tuple[str, dict[str, Any]]] = []
-    spa_sources: list[tuple[str, dict[str, Any]]] = []
 
-    with open(jsonl_path, "r", encoding="utf-8") as f:
-        for line in f:
+class GoldSourceManifestError(ValueError):
+    """Raised when an approval manifest is malformed or references missing source IDs."""
+
+
+def discover_source_candidates(
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return a neutral inventory for human curation without assigning Gold categories.
+
+    This function deliberately does not classify SALE/SPA or mark anything approved.
+    It exists only to make a review manifest easier to prepare.
+    """
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Research dataset file not found: {dataset_path}")
+
+    candidates: list[dict[str, Any]] = []
+    with dataset_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
             if not line.strip():
                 continue
             entry = json.loads(line)
-            sample_id = entry.get("sample_id")
+            sample_id = str(entry.get("sample_id") or "").strip()
             elements = entry.get("elements", [])
-            if not elements or len(elements) < 3:
+            if not sample_id or not isinstance(elements, list) or not elements:
                 continue
 
-            all_text = " ".join([e.get("text", {}).get("content", "").lower() for e in elements if "text" in e])
+            text_parts = [
+                str(elem.get("text", {}).get("content", "")).strip()
+                for elem in elements
+                if isinstance(elem, dict) and isinstance(elem.get("text"), dict)
+            ]
+            excerpt = " | ".join(part for part in text_parts if part)[:300]
+            candidates.append(
+                {
+                    "upstream_id": sample_id,
+                    "element_count": len(elements),
+                    "text_excerpt": excerpt,
+                    "human_quality_status": "UNREVIEWED",
+                    "approved": False,
+                }
+            )
+            if limit is not None and len(candidates) >= limit:
+                break
+    return candidates
 
-            if any(k in all_text for k in ["sale", "off", "discount", "buy", "shop", "deal", "special"]):
-                if len(sale_sources) < 5:
-                    sale_sources.append((f"real_sale_{len(sale_sources)+1:03d}", entry))
-            elif any(k in all_text for k in ["spa", "beauty", "skin", "care", "massage", "relax", "health", "wellness", "salon", "lorem", "fashion", "design", "art", "style"]):
-                if len(spa_sources) < 5:
-                    spa_sources.append((f"real_spa_{len(spa_sources)+1:03d}", entry))
 
-    return {"SALE": sale_sources, "SPA": spa_sources}
+def _load_approved_manifest(manifest_path: Path) -> list[dict[str, Any]]:
+    if not manifest_path.exists():
+        raise GoldSourceApprovalRequired(
+            "Approved Gold source manifest is missing. Review source previews first and "
+            f"create an explicit manifest at: {manifest_path}"
+        )
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rows = payload.get("sources") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) or not rows:
+        raise GoldSourceManifestError("approval manifest must contain a non-empty 'sources' list")
+
+    validated: list[dict[str, Any]] = []
+    seen_source_ids: set[str] = set()
+    seen_upstream_ids: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise GoldSourceManifestError("each approved source entry must be an object")
+        source_id = str(row.get("source_id") or "").strip()
+        upstream_id = str(row.get("upstream_id") or "").strip()
+        category = str(row.get("category") or "").upper().strip()
+        quality = str(row.get("human_quality_status") or "").upper().strip()
+        approved = bool(row.get("approved", False))
+
+        if not source_id or not upstream_id:
+            raise GoldSourceManifestError("source_id and upstream_id are required")
+        if category not in {"SALE", "SPA", "CAFE", "MENU", "SIGNAGE"}:
+            raise GoldSourceManifestError(f"unsupported Gold category: {category!r}")
+        if not approved or quality != "APPROVED":
+            raise GoldSourceApprovalRequired(
+                f"source {source_id!r} is not explicitly human-approved"
+            )
+        if source_id in seen_source_ids or upstream_id in seen_upstream_ids:
+            raise GoldSourceManifestError("duplicate source_id or upstream_id in approval manifest")
+
+        seen_source_ids.add(source_id)
+        seen_upstream_ids.add(upstream_id)
+        validated.append(
+            {
+                "source_id": source_id,
+                "upstream_id": upstream_id,
+                "category": category,
+                "human_quality_status": "APPROVED",
+                "approved": True,
+                "review_notes": str(row.get("review_notes") or ""),
+            }
+        )
+    return validated
 
 
-def convert_entry_to_design_document(source_id: str, category: str, entry: dict[str, Any]) -> tuple[DesignDocument, str]:
-    """Convert raw dataset entry to a structured DesignDocument and calculate SHA-256."""
-    raw_str = json.dumps(entry, sort_keys=True)
-    source_sha256 = hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
+def load_real_sources_from_dataset(
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    approved_manifest_path: Path = DEFAULT_APPROVED_MANIFEST_PATH,
+) -> dict[str, list[tuple[str, dict[str, Any], dict[str, Any]]]]:
+    """Load only exact upstream IDs from an explicit human-approved manifest."""
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Research dataset file not found: {dataset_path}")
+
+    approved_rows = _load_approved_manifest(approved_manifest_path)
+    approved_by_upstream = {row["upstream_id"]: row for row in approved_rows}
+    found: dict[str, dict[str, Any]] = {}
+
+    with dataset_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            upstream_id = str(entry.get("sample_id") or "").strip()
+            if upstream_id in approved_by_upstream:
+                found[upstream_id] = entry
+
+    missing = sorted(set(approved_by_upstream) - set(found))
+    if missing:
+        raise GoldSourceManifestError(
+            "approved manifest references dataset IDs that were not found: " + ", ".join(missing)
+        )
+
+    grouped: dict[str, list[tuple[str, dict[str, Any], dict[str, Any]]]] = {}
+    for row in approved_rows:
+        grouped.setdefault(row["category"], []).append(
+            (row["source_id"], found[row["upstream_id"]], row)
+        )
+    return grouped
+
+
+def _source_sha256(entry: dict[str, Any]) -> str:
+    canonical = json.dumps(entry, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def convert_entry_to_design_document(
+    source_id: str,
+    category: str,
+    entry: dict[str, Any],
+) -> tuple[DesignDocument, str]:
+    """Convert an approved dataset row to ``DesignDocument`` without widening rights."""
+    source_sha256 = _source_sha256(entry)
 
     canvas_raw = entry.get("canvas", {})
-    w_px = float(canvas_raw.get("width", 1080.0))
-    h_px = float(canvas_raw.get("height", 1080.0))
-
+    width = float(canvas_raw.get("width", 1080.0))
+    height = float(canvas_raw.get("height", 1080.0))
     canvas = CanvasSpec(
-        width=w_px,
-        height=h_px,
+        width=width,
+        height=height,
         unit="px",
         background=VisualSpec(fill=ColorSpec(model="hex", values=["#FFFFFF"])),
     )
 
     elements: list[DesignElement] = []
     for idx, elem_raw in enumerate(entry.get("elements", [])):
+        if not isinstance(elem_raw, dict):
+            continue
         bbox_raw = elem_raw.get("bbox", {})
+        if not isinstance(bbox_raw, dict):
+            continue
         bbox = BoundingBox(
-            x=float(bbox_raw.get("x", 0)),
-            y=float(bbox_raw.get("y", 0)),
-            width=float(bbox_raw.get("width", 100)),
-            height=float(bbox_raw.get("height", 50)),
+            x=max(0.0, float(bbox_raw.get("x", 0))),
+            y=max(0.0, float(bbox_raw.get("y", 0))),
+            width=max(1e-6, float(bbox_raw.get("width", 100))),
+            height=max(1e-6, float(bbox_raw.get("height", 50))),
         )
-        bbox_norm = normalize_bbox(bbox, canvas)
+        # Out-of-canvas source geometry is evidence of a bad/unsupported source,
+        # not something to silently normalize into a valid Gold reference.
+        if bbox.x + bbox.width > width or bbox.y + bbox.height > height:
+            raise ValueError(
+                f"source {source_id} element {idx} exceeds canvas; source must be reviewed/fixed"
+            )
 
         text_spec = None
-        if "text" in elem_raw and elem_raw["text"].get("content"):
-            t_raw = elem_raw["text"]
+        text_raw = elem_raw.get("text")
+        if isinstance(text_raw, dict) and text_raw.get("content"):
+            alignment = str(text_raw.get("alignment") or "center").lower()
+            if alignment not in {"left", "center", "right", "justify"}:
+                alignment = "center"
+            family = str(text_raw.get("font_family") or "Arial")
             text_spec = TextSpec(
-                content=t_raw.get("content", ""),
-                font_family=t_raw.get("font_family", "Arial"),
-                font_size=float(t_raw.get("font_size", 24.0)),
-                font_weight="bold" if "bold" in t_raw.get("font_family", "").lower() else "normal",
-                alignment="center",
+                content=str(text_raw.get("content") or ""),
+                font_family=family,
+                font_size=max(1.0, float(text_raw.get("font_size", 24.0))),
+                font_weight="bold" if "bold" in family.lower() else "normal",
+                alignment=alignment,
             )
+
+        raw_type = str(elem_raw.get("type") or "text")
+        element_type = raw_type if raw_type in {"text", "rectangle", "ellipse", "group", "other"} else "other"
+        if element_type == "text" and text_spec is None:
+            element_type = "other"
 
         elements.append(
             DesignElement(
                 id=f"src_elem_{idx}",
-                name=elem_raw.get("name", f"Element {idx}"),
-                type=elem_raw.get("type", "text"),
+                name=str(elem_raw.get("name") or f"Element {idx}"),
+                type=element_type,
                 bbox=bbox,
-                bbox_norm=bbox_norm,
-                z_index=idx,
-                text=text_spec,
+                bbox_norm=normalize_bbox(bbox, canvas),
+                rotation=float(elem_raw.get("rotation", 0.0) or 0.0),
+                z_index=int(elem_raw.get("z_index", idx)),
+                text=text_spec if element_type == "text" else None,
                 visual=VisualSpec(fill=ColorSpec(model="hex", values=["#1E293B"])),
             )
         )
@@ -115,123 +259,136 @@ def convert_entry_to_design_document(source_id: str, category: str, entry: dict[
         source=SourceSpec(
             name="genposter100k",
             split="train",
-            license_class="CC0_or_project_owned",
+            license_class=GENPOSTER_LICENSE_CLASS,
             upstream_id=str(entry.get("sample_id")),
-            commercial_allowed=True,
+            commercial_allowed=GENPOSTER_COMMERCIAL_ALLOWED,
         ),
         canvas=canvas,
         category=category.upper(),
         elements=elements,
+        metadata={"project_owned": GENPOSTER_PROJECT_OWNED},
     )
-
     return doc, source_sha256
 
 
-def build_real_gold_library(output_dir: Path = REAL_GOLD_DIR) -> tuple[list[GoldDesignGrammarV1], dict[str, Any]]:
-    """Extract real Gold Design Grammars from actual source designs and write source inventory."""
+def build_real_gold_library(
+    output_dir: Path = REAL_GOLD_DIR,
+    *,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    approved_manifest_path: Path = DEFAULT_APPROVED_MANIFEST_PATH,
+) -> tuple[list[GoldDesignGrammarV1], dict[str, Any]]:
+    """Extract grammars only from human-approved, exact source IDs."""
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    sources_by_cat = load_real_sources_from_dataset()
+    sources_by_category = load_real_sources_from_dataset(dataset_path, approved_manifest_path)
     extractor = GoldGrammarExtractor()
 
-    real_grammars: list[GoldDesignGrammarV1] = []
+    grammars: list[GoldDesignGrammarV1] = []
     inventory_entries: list[dict[str, Any]] = []
 
-    for cat, sources in sources_by_cat.items():
-        cat_dir = output_dir / cat.lower()
-        cat_dir.mkdir(parents=True, exist_ok=True)
+    for category, sources in sources_by_category.items():
+        category_dir = output_dir / category.lower()
+        category_dir.mkdir(parents=True, exist_ok=True)
 
-        for source_id, entry in sources:
-            src_dir = cat_dir / source_id
-            src_dir.mkdir(parents=True, exist_ok=True)
+        for source_id, entry, approval in sources:
+            source_dir = category_dir / source_id
+            source_dir.mkdir(parents=True, exist_ok=True)
+            document, source_sha256 = convert_entry_to_design_document(source_id, category, entry)
 
-            doc, source_sha256 = convert_entry_to_design_document(source_id, cat, entry)
-
-            # 1. Render source_preview.png
-            preview_path = src_dir / "source_preview.png"
-            render_preview(doc, preview_path, max_dimension=800)
-
-            # 2. Extract Gold Design Grammar from real source document
-            grammar = extractor.extract(
-                doc,
-                grammar_id=f"gold_{source_id}",
-                grammar_name=f"Real Extracted {cat} {source_id.upper()}",
+            source_entry_path = source_dir / "source_entry.json"
+            source_entry_path.write_text(
+                json.dumps(entry, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
             )
 
-            # Bind real provenance traceability fields
+            preview_path = source_dir / "source_preview.png"
+            render_preview(document, preview_path, max_dimension=800)
+
+            grammar = extractor.extract(
+                document,
+                grammar_id=f"gold_{source_id}",
+                grammar_name=f"Extracted {category} {source_id.upper()}",
+            )
             grammar.gold_status = "PROVISIONAL_REAL_REFERENCE"
-            grammar.provenance = {
-                "extracted_from_real_design": True,
-                "source_design_id": source_id,
-                "source_sha256": source_sha256,
-                "license_class": "CC0_or_project_owned",
-                "commercial_allowed": True,
-                "extraction_method": "GoldGrammarExtractor",
-                "extracted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            }
+            grammar.provenance.update(
+                {
+                    "extracted_from_real_design": True,
+                    "source_design_id": source_id,
+                    "source_sha256": source_sha256,
+                    "license_class": GENPOSTER_LICENSE_CLASS,
+                    "commercial_allowed": GENPOSTER_COMMERCIAL_ALLOWED,
+                    "project_owned": GENPOSTER_PROJECT_OWNED,
+                    "human_quality_status": approval["human_quality_status"],
+                    "human_approved": True,
+                    "extraction_method": "GoldGrammarExtractor",
+                    "extracted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            )
 
-            # 3. Save grammar.json
-            with open(src_dir / "grammar.json", "w", encoding="utf-8") as f:
-                f.write(grammar.model_dump_json(indent=2))
-
-            # 4. Save source_manifest.json
+            (source_dir / "grammar.json").write_text(grammar.model_dump_json(indent=2), encoding="utf-8")
             source_manifest = {
                 "source_id": source_id,
-                "category": cat,
+                "upstream_id": approval["upstream_id"],
+                "category": category,
                 "format": "json",
                 "editable": True,
-                "sample_id": doc.sample_id,
                 "source_sha256": source_sha256,
-                "license_class": "CC0_or_project_owned",
-                "commercial_allowed": True,
+                "license_class": GENPOSTER_LICENSE_CLASS,
+                "commercial_allowed": GENPOSTER_COMMERCIAL_ALLOWED,
+                "project_owned": GENPOSTER_PROJECT_OWNED,
+                "human_quality_status": approval["human_quality_status"],
+                "human_approved": True,
                 "preview_path": str(preview_path),
+                "source_entry_path": str(source_entry_path),
             }
-            with open(src_dir / "source_manifest.json", "w", encoding="utf-8") as f:
-                json.dump(source_manifest, f, indent=2)
-
-            # 5. Save extraction_report.json
+            (source_dir / "source_manifest.json").write_text(
+                json.dumps(source_manifest, indent=2), encoding="utf-8"
+            )
             extraction_report = {
                 "source_id": source_id,
                 "source_sha256": source_sha256,
-                "extractor_version": "1.0",
+                "extractor_version": "1.1",
                 "extracted_slot_count": len(grammar.slots),
                 "extracted_relationship_count": len(grammar.relationships),
-                "normalized_bounding_boxes": [s.bbox_norm.model_dump() for s in grammar.slots],
-                "spatial_relationships": [r.model_dump() for r in grammar.relationships],
+                "normalized_bounding_boxes": [slot.bbox_norm.model_dump() for slot in grammar.slots],
+                "spatial_relationships": [rel.model_dump() for rel in grammar.relationships],
             }
-            with open(src_dir / "extraction_report.json", "w", encoding="utf-8") as f:
-                json.dump(extraction_report, f, indent=2)
+            (source_dir / "extraction_report.json").write_text(
+                json.dumps(extraction_report, indent=2), encoding="utf-8"
+            )
 
-            real_grammars.append(grammar)
-
+            grammars.append(grammar)
             inventory_entries.append(
                 {
                     "source_id": source_id,
-                    "path": str(src_dir),
-                    "category": cat,
+                    "path": str(source_dir),
+                    "category": category,
                     "format": "json",
                     "editable": True,
                     "preview_available": True,
-                    "project_owned": True,
-                    "license_class": "CC0_or_project_owned",
-                    "commercial_allowed": True,
-                    "human_quality_status": "PROVISIONAL_REAL_REFERENCE",
+                    "project_owned": GENPOSTER_PROJECT_OWNED,
+                    "license_class": GENPOSTER_LICENSE_CLASS,
+                    "commercial_allowed": GENPOSTER_COMMERCIAL_ALLOWED,
+                    "human_quality_status": approval["human_quality_status"],
                     "eligible_for_extraction": True,
-                    "reason": "Real layout reference from project research dataset",
+                    "reason": "Explicit human-approved source ID from research dataset",
                     "sha256": source_sha256,
                 }
             )
 
     inventory = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "total_sources": len(inventory_entries),
-        "sale_source_count": len([e for e in inventory_entries if e["category"] == "SALE"]),
-        "spa_source_count": len([e for e in inventory_entries if e["category"] == "SPA"]),
+        "source_policy": "explicit_human_approved_manifest_only",
+        "commercial_allowed": False,
         "sources": inventory_entries,
     }
+    for category in {entry["category"] for entry in inventory_entries}:
+        inventory[f"{category.lower()}_source_count"] = sum(
+            1 for entry in inventory_entries if entry["category"] == category
+        )
 
-    with open(output_dir / "source_inventory.json", "w", encoding="utf-8") as f:
-        json.dump(inventory, f, indent=2)
-
-    return real_grammars, inventory
+    (output_dir / "source_inventory.json").write_text(
+        json.dumps(inventory, indent=2), encoding="utf-8"
+    )
+    return grammars, inventory
