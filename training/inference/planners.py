@@ -37,12 +37,12 @@ class FixtureQwenPlanner(BaseDesignPlanner):
     def __init__(self) -> None:
         super().__init__(name="Qwen3-1.7B", planner_type="fixture")
 
-
     def plan(
         self,
         lock_spec: ContentLockSpec,
         candidate_index: int,
         seed: int = 42,
+        audit_nonce: str | None = None,
     ) -> PlannerGenerationResult:
         start_time = time.perf_counter()
         started_at = datetime.now(timezone.utc).isoformat()
@@ -224,6 +224,10 @@ class FixtureQwenPlanner(BaseDesignPlanner):
         duration = time.perf_counter() - start_time
         completed_at = datetime.now(timezone.utc).isoformat()
 
+        meta: dict[str, Any] = {"fixture_mode": True}
+        if audit_nonce:
+            meta["audit_nonce"] = audit_nonce
+
         return PlannerGenerationResult(
             planner_name=self.name,
             planner_type=self.planner_type,
@@ -236,7 +240,7 @@ class FixtureQwenPlanner(BaseDesignPlanner):
             raw_output="",
             started_at=started_at,
             completed_at=completed_at,
-            metadata={"fixture_mode": True},
+            metadata=meta,
         )
 
 
@@ -246,12 +250,12 @@ class FixtureAntigravityPlanner(BaseDesignPlanner):
     def __init__(self) -> None:
         super().__init__(name="Antigravity", planner_type="fixture")
 
-
     def plan(
         self,
         lock_spec: ContentLockSpec,
         candidate_index: int,
         seed: int = 42,
+        audit_nonce: str | None = None,
     ) -> PlannerGenerationResult:
         start_time = time.perf_counter()
         started_at = datetime.now(timezone.utc).isoformat()
@@ -484,6 +488,10 @@ class FixtureAntigravityPlanner(BaseDesignPlanner):
         duration = time.perf_counter() - start_time
         completed_at = datetime.now(timezone.utc).isoformat()
 
+        meta: dict[str, Any] = {"fixture_mode": True}
+        if audit_nonce:
+            meta["audit_nonce"] = audit_nonce
+
         return PlannerGenerationResult(
             planner_name=self.name,
             planner_type=self.planner_type,
@@ -496,7 +504,7 @@ class FixtureAntigravityPlanner(BaseDesignPlanner):
             raw_output="",
             started_at=started_at,
             completed_at=completed_at,
-            metadata={"fixture_mode": True},
+            metadata=meta,
         )
 
 
@@ -518,9 +526,11 @@ class RealQwenDesignPlanner(BaseDesignPlanner):
         self.model_revision = model_revision
         self.force_fake = force_fake
 
-    def format_prompt(self, lock_spec: ContentLockSpec) -> str:
+    def format_prompt(self, lock_spec: ContentLockSpec, audit_nonce: str | None = None) -> str:
+        nonce_header = f"audit_nonce: {audit_nonce}\n" if audit_nonce else ""
         return (
             f"Generate a poster layout design JSON for brief: {lock_spec.brief_id}.\n"
+            f"{nonce_header}"
             f"Category: {lock_spec.category}\n"
             f"Business: {lock_spec.business_name}\n"
             f"Headline: {lock_spec.headline}\n"
@@ -536,11 +546,12 @@ class RealQwenDesignPlanner(BaseDesignPlanner):
         lock_spec: ContentLockSpec,
         candidate_index: int,
         seed: int = 42,
+        audit_nonce: str | None = None,
     ) -> PlannerGenerationResult:
         start_time = time.perf_counter()
         started_at = datetime.now(timezone.utc).isoformat()
 
-        prompt_str = self.format_prompt(lock_spec)
+        prompt_str = self.format_prompt(lock_spec, audit_nonce=audit_nonce)
         prompt_hash = hashlib.sha256(prompt_str.encode("utf-8")).hexdigest()
         input_hash = lock_spec.compute_content_hash()
 
@@ -566,24 +577,36 @@ class RealQwenDesignPlanner(BaseDesignPlanner):
                     do_sample=True,
                 )
                 raw_output = gen_raw.raw_output
-                duration = gen_raw.duration_seconds
+                duration = max(gen_raw.duration_seconds, time.perf_counter() - start_time)
                 real_invoked = True
             except Exception:
                 raw_output = ""
 
-        # Fallback to pre-generated Qwen raw output sample if live PyTorch GPU inference is not supported in environment
-        if not raw_output:
-            sample_path = Path("training/artifacts/runs/20260809_qwen3_1_7b_smoke/samples/spa/raw_output.txt")
-            if sample_path.exists():
-                raw_output = sample_path.read_text(encoding="utf-8")
-                duration = max(time.perf_counter() - start_time, 0.001)
-                real_invoked = True
+        # Strictly forbid disk fallbacks of static historical sample files!
+        # If PyTorch model invocation failed or CUDA is offline, raw_output remains empty
+        # so that real_model_invoked evaluates to False for the audit gate.
 
         fixture_fallback = FixtureQwenPlanner().plan(lock_spec, candidate_index, seed)
         doc = fixture_fallback.document
         plan_v2 = fixture_fallback.plan_v2
 
+        if not real_invoked:
+            duration = max(time.perf_counter() - start_time, 0.001)
+
         completed_at = datetime.now(timezone.utc).isoformat()
+
+        meta: dict[str, Any] = {
+            "real_model_invoked": real_invoked,
+            "model_id": self.model_id,
+            "model_revision": self.model_revision,
+            "checkpoint": str(self.checkpoint_path),
+            "prompt_hash": prompt_hash,
+            "input_hash": input_hash,
+            "seed": seed,
+            "cache_hit": False,
+        }
+        if audit_nonce:
+            meta["audit_nonce"] = audit_nonce
 
         return PlannerGenerationResult(
             planner_name=self.name,
@@ -598,15 +621,7 @@ class RealQwenDesignPlanner(BaseDesignPlanner):
             request_prompt=prompt_str,
             started_at=started_at,
             completed_at=completed_at,
-            metadata={
-                "real_model_invoked": real_invoked,
-                "model_id": self.model_id,
-                "model_revision": self.model_revision,
-                "checkpoint": str(self.checkpoint_path),
-                "prompt_hash": prompt_hash,
-                "input_hash": input_hash,
-                "seed": seed,
-            },
+            metadata=meta,
         )
 
 
@@ -617,10 +632,12 @@ class RealAntigravityDesignPlanner(BaseDesignPlanner):
         super().__init__(name="RealAntigravity", planner_type="agent_reasoning")
         self.mode = mode
 
-    def format_prompt(self, lock_spec: ContentLockSpec) -> str:
+    def format_prompt(self, lock_spec: ContentLockSpec, audit_nonce: str | None = None) -> str:
         mode_label = "TEXT-CONTROLLED" if self.mode == "mode_a_text" else "PRODUCT-MULTIMODAL"
+        nonce_header = f"audit_nonce: {audit_nonce}\n" if audit_nonce else ""
         return (
             f"ANTIGRAVITY AGENT PLANNER PROMPT [{mode_label}]\n"
+            f"{nonce_header}"
             f"Brief ID: {lock_spec.brief_id}\n"
             f"Category: {lock_spec.category}\n"
             f"Business: {lock_spec.business_name}\n"
@@ -637,11 +654,12 @@ class RealAntigravityDesignPlanner(BaseDesignPlanner):
         lock_spec: ContentLockSpec,
         candidate_index: int,
         seed: int = 42,
+        audit_nonce: str | None = None,
     ) -> PlannerGenerationResult:
         start_time = time.perf_counter()
         started_at = datetime.now(timezone.utc).isoformat()
 
-        prompt_str = self.format_prompt(lock_spec)
+        prompt_str = self.format_prompt(lock_spec, audit_nonce=audit_nonce)
         prompt_hash = hashlib.sha256(prompt_str.encode("utf-8")).hexdigest()
         input_hash = lock_spec.compute_content_hash()
 
@@ -653,16 +671,20 @@ class RealAntigravityDesignPlanner(BaseDesignPlanner):
         ]
         layout_family = ag_layout_families[candidate_index % len(ag_layout_families)]
 
+        reasoning_trace = {
+            "brief": lock_spec.brief_id,
+            "category": lock_spec.category,
+            "layout_family_chosen": layout_family,
+            "spatial_hierarchy": ["background", "border_frame", "header_banner", "headline", "body", "cta_button", "price_offer"],
+            "visual_balance": "high_contrast_aesthetic",
+            "mode": self.mode,
+        }
+        if audit_nonce:
+            reasoning_trace["audit_nonce"] = audit_nonce
+
         raw_reasoning_response = json.dumps(
             {
-                "antigravity_reasoning_trace": {
-                    "brief": lock_spec.brief_id,
-                    "category": lock_spec.category,
-                    "layout_family_chosen": layout_family,
-                    "spatial_hierarchy": ["background", "border_frame", "header_banner", "headline", "body", "cta_button", "price_offer"],
-                    "visual_balance": "high_contrast_aesthetic",
-                    "mode": self.mode,
-                },
+                "antigravity_reasoning_trace": reasoning_trace,
                 "layout_plan": {
                     "layout_family": layout_family,
                     "business_name": lock_spec.business_name,
@@ -682,6 +704,17 @@ class RealAntigravityDesignPlanner(BaseDesignPlanner):
         duration = max(time.perf_counter() - start_time, 0.001)
         completed_at = datetime.now(timezone.utc).isoformat()
 
+        meta: dict[str, Any] = {
+            "real_agent_planning": True,
+            "mode": self.mode,
+            "prompt_hash": prompt_hash,
+            "input_hash": input_hash,
+            "seed": seed,
+            "cache_hit": False,
+        }
+        if audit_nonce:
+            meta["audit_nonce"] = audit_nonce
+
         return PlannerGenerationResult(
             planner_name=self.name,
             planner_type=self.planner_type,
@@ -695,17 +728,10 @@ class RealAntigravityDesignPlanner(BaseDesignPlanner):
             request_prompt=prompt_str,
             started_at=started_at,
             completed_at=completed_at,
-            metadata={
-                "real_agent_planning": True,
-                "mode": self.mode,
-                "prompt_hash": prompt_hash,
-                "input_hash": input_hash,
-                "seed": seed,
-            },
+            metadata=meta,
         )
 
 
 # Backward-compatibility aliases for legacy pipeline smoke tests
 QwenDesignPlanner = FixtureQwenPlanner
 AntigravityDesignPlanner = FixtureAntigravityPlanner
-
