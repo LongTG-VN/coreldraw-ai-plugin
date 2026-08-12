@@ -237,6 +237,22 @@ not ingested
 
 ---
 
+## PROVENANCE AUDIT RESULT
+
+```text
+GRAMMARS_ARE_MANUALLY_AUTHORED_TEMPLATES
+```
+
+Milestone Artifacts Relabeled As:
+```text
+STRUCTURED_GRAMMAR_ADAPTATION_PILOT
+```
+
+- **Tested Hypothesis**: Hypothesis B (`manually authored template -> adaptation`).
+- **Provenance Breakdown**: `0/15` real reference designs extracted ($0.0\%$), `15/15` manually authored Python layout structures ($100.0\%$).
+
+---
+
 ## FINAL STATUS
 
 ```text
@@ -246,18 +262,23 @@ gold_adapter_ready: true
 
 provisional_gold_count: 15
 human_certified_gold_count: 0
+real_reference_extracted_count: 0
+manually_authored_count: 15
+
+provenance_audit_conclusion: GRAMMARS_ARE_MANUALLY_AUTHORED_TEMPLATES
+relabeled_milestone_status: STRUCTURED_GRAMMAR_ADAPTATION_PILOT
 
 pilot_generated: true
 pilot_technical_safe: true
 
-ready_for_human_review: true
+ready_for_human_review: false
 
 ready_for_preference_training: false
 preference_model_trained: false
 
 v0.4_complete: false
 production_ready: false
-commercial_allowed: true
+commercial_allowed: false
 ```
 
 ---
