@@ -18,8 +18,9 @@ from training.schemas.gold import (
 class GoldGrammarExtractor:
     """Extract a reusable ``GoldDesignGrammarV1`` from a structured document.
 
-    The extractor never upgrades licensing/ownership. Provenance is inherited
-    from ``DesignDocument.source`` and may be further tightened by the caller.
+    The extractor never upgrades licensing or ownership. Rights are inherited from
+    ``DesignDocument.source`` and explicit document metadata. Callers may only
+    tighten those rights downstream, not widen them without a new source audit.
     """
 
     def extract(
@@ -37,13 +38,11 @@ class GoldGrammarExtractor:
         slots: list[GoldSlotV1] = []
         asset_regions: list[GoldAssetRegionV1] = []
         typography_grammar: dict[str, GoldTypographyRoleV1] = {}
-
         body_font_size = self._estimate_body_font_size(document)
 
         for elem in document.elements:
             role: SemanticRole = role_map.get(elem.id) or role_map.get(elem.name) or self._infer_role(elem)
             bbox_norm = normalize_bbox(elem.bbox, document.canvas)
-
             slots.append(
                 GoldSlotV1(
                     slot_id=elem.id,
@@ -101,6 +100,7 @@ class GoldGrammarExtractor:
             if fill.model == "hex" and fill.values:
                 bg_color = str(fill.values[0])
 
+        project_owned = document.metadata.get("project_owned") is True
         return GoldDesignGrammarV1(
             grammar_id=grammar_id,
             grammar_name=grammar_name,
@@ -124,7 +124,7 @@ class GoldGrammarExtractor:
                 "source_upstream_id": document.source.upstream_id,
                 "license_class": document.source.license_class,
                 "commercial_allowed": bool(document.source.commercial_allowed),
-                "project_owned": False,
+                "project_owned": project_owned,
             },
         )
 
