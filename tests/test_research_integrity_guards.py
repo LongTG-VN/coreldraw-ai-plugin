@@ -58,6 +58,7 @@ def test_offline_artifact_runners_never_claim_real_cdr():
         assert "NOT_GENERATED_REQUIRES_REAL_COREL_API" in source
         assert "real_cdr_verified" in source
         assert 'with open(cdr_path, "wb")' not in source
+        assert ".write_bytes(" not in source
 
 
 def test_deterministic_planner_shootout_is_not_reviewable():
@@ -75,7 +76,9 @@ def test_real_planner_shootout_is_fail_closed():
     assert '"design_plan_derived_from_ai_output"' in source
     assert '"external_execution_verified"' in source
     assert 'review_queue.jsonl' not in source
-    assert 'output.cdr' not in source
+    assert 'with open(' not in source
+    assert '.write_bytes(' not in source
+    assert 'requested_output_name' not in source
 
 
 def test_final_provenance_audit_cannot_use_nonce_echo_as_proof():
