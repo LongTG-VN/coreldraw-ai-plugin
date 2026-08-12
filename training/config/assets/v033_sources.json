@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "policy": "Curated Commons file pages are re-verified through imageinfo extmetadata before download.",
+  "public_assets": {
+    "spa": {
+      "asset_id": "spa_hero_01",
+      "role": "hero",
+      "commons_title": "File:Bali Ubud spa.jpg",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Bali_Ubud_spa.jpg",
+      "license_name": "CC0 1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "author": "Jeong seolah",
+      "fit_mode": "cover",
+      "focal_x": 0.5,
+      "focal_y": 0.48
+    },
+    "cafe": {
+      "asset_id": "cafe_hero_01",
+      "role": "hero",
+      "commons_title": "File:Coffee Cup on Modern Table.jpg",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Coffee_Cup_on_Modern_Table.jpg",
+      "license_name": "CC0 1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "author": "Genaro35",
+      "fit_mode": "cover",
+      "focal_x": 0.5,
+      "focal_y": 0.55
+    },
+    "menu": {
+      "asset_id": "menu_hero_01",
+      "role": "hero",
+      "commons_title": "File:Bò né.jpg",
+      "source_page": "https://commons.wikimedia.org/wiki/File:B%C3%B2_n%C3%A9.jpg",
+      "license_name": "CC0 1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "author": "Kwozyn",
+      "fit_mode": "cover",
+      "focal_x": 0.5,
+      "focal_y": 0.5
+    }
+  },
+  "excluded_candidates": [
+    {
+      "case_id": "sale",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Bottle_image.jpg",
+      "reason": "Rejected after visual inspection: recognizable product branding conflicts with benchmark trademark policy."
+    },
+    {
+      "case_id": "sale",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Glass_bottle.jpg",
+      "reason": "CC0 verified but download repeatedly failed with Wikimedia HTTP 429; replaced by project-owned generic product graphic."
+    }
+  ]
+}

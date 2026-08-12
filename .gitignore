@@ -9,6 +9,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+.venv-training/
 
 # Editor / OS
 .vscode/
@@ -18,3 +19,9 @@ Thumbs.db
 
 # Storage / Temp exports
 storage/
+
+# Design-AI training data and generated artifacts
+training/data/
+training/vendor/
+training/artifacts/
+training/workspace/

@@ -1,0 +1,148 @@
+{
+  "schema_version": "1.0",
+  "release": {
+    "name": "Design AI",
+    "version": "0.3.1",
+    "milestone": "Stabilized Visual Composition + Local Trained Runtime",
+    "status": "verified_clean_research_checkpoint",
+    "production_ready": false,
+    "commercial_allowed": false,
+    "human_reviewed": false,
+    "research_only": true,
+    "next_milestone": "Human visual review of v0.3 vs v0.3.1 artifacts"
+  },
+  "model": {
+    "model_id": "Qwen/Qwen3-1.7B",
+    "model_revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+    "adapter_checkpoint": "training/artifacts/runs/20260809_qwen3_1_7b_smoke/checkpoint-5",
+    "trained_model": true,
+    "retrained_for_v0.3.1": false,
+    "quantization": "NF4 4-bit QLoRA",
+    "lora_rank": 8,
+    "lora_alpha": 16
+  },
+  "reference_corpus": {
+    "reference_count": 165,
+    "genposter_structural_count": 100,
+    "project_owned_structural_template_count": 65,
+    "top_k": 5,
+    "strategy": "weighted similarity + deterministic MMR",
+    "research_only": true,
+    "commercial_allowed": false,
+    "license_reason": "mixed corpus includes GenPoster CC-BY-NC-4.0"
+  },
+  "clean_validation": {
+    "validated_from_commit": "60380fb8b63f06688125c7ccf3dae6cf94db536a",
+    "artifact_root": "training/artifacts/benchmarks/20260812_design_v0_3_1_clean",
+    "comparison_root": "training/artifacts/benchmarks/20260812_design_v0_3_1_clean/comparisons/v0_3_vs_v0_3_1_clean",
+    "prompt_count": 13,
+    "candidate_count": 52,
+    "fresh_candidate_count": 52,
+    "resumed_verified_candidate_count": 0,
+    "audited_raw_cache_reuse_count": 0,
+    "unsafe_reused_candidate_count": 0,
+    "strict_schema_valid_count": 52,
+    "raw_schema_valid_count": 0,
+    "candidate_preview_valid_count": 52,
+    "candidate_corel_compile_count": 52,
+    "winner_artifact_valid_count": 13,
+    "truncated_count": 0,
+    "winner_unresolved_overflow_count": 0,
+    "rejected_candidate_unresolved_overflow_count": 15,
+    "average_candidate_latency_seconds": 34.335444015383615,
+    "average_retrieval_latency_seconds": 0.018066684605750758,
+    "peak_vram_gib": 1.445169448852539,
+    "human_preference_collected": false,
+    "all_automatic_release_gates_pass": true
+  },
+  "metrics": {
+    "v0.3_clean": {
+      "combined": 0.8286036384329051,
+      "technical": 0.8636385634233317,
+      "overlap": 0.0,
+      "spacing": 0.8855743499328954,
+      "hierarchy": 0.6899652299175001,
+      "text_fit": 0.9423076923076923,
+      "coverage": 0.31748927428127427,
+      "schema_validity": 1.0
+    },
+    "v0.3.1_clean": {
+      "combined": 0.8718896115290868,
+      "technical": 0.8994871794871795,
+      "overlap": 0.0,
+      "spacing": 0.942829748534294,
+      "hierarchy": 0.7046465678062777,
+      "text_fit": 1.0,
+      "coverage": 0.4466774281274281,
+      "candidate_diversity": 0.26421075336438926,
+      "schema_validity": 1.0
+    },
+    "v0.3_to_v0.3.1_combined_improvement_percent": 5.22396609047557,
+    "v0.2_fair_to_v0.3.1_combined_improvement_percent": 17.036122608646654
+  },
+  "visual_metrics": {
+    "density_fit": 0.877543862794963,
+    "palette_cohesion": 0.9807692307692307,
+    "contrast": 0.8051795889914414,
+    "headline_dominance": 0.5257467734464587,
+    "cta_prominence": 0.34403846153846146,
+    "typography_differentiation": 0.6307692307692307,
+    "asset_intent_preservation": 1.0,
+    "decorative_balance": 0.842948717948718,
+    "focal_point_strength": 0.67493006993007
+  },
+  "dense_menu": {
+    "item_placeholder_count": 10,
+    "price_placeholder_count": 10,
+    "fake_customer_prices": false,
+    "placeholder_provenance": "benchmark_placeholder",
+    "truncated_count": 0,
+    "unresolved_overflow_count": 0,
+    "price_alignment": 1.0,
+    "text_fit": 1.0,
+    "coverage": 0.6286565656565657,
+    "overlap": 0.0,
+    "hierarchy": 0.7403243584384864,
+    "combined": 0.8082507341760891
+  },
+  "runtime_surface": {
+    "baseline_endpoint": "/api/v1/design/generate",
+    "baseline_remains_lightweight": true,
+    "trained_endpoint": "/api/v1/design/generate-trained",
+    "status_endpoint": "/api/v1/design/model/status",
+    "lazy_model_load": true,
+    "single_session_reuse": true,
+    "sequential_gpu_generation": true,
+    "run_manifest": true,
+    "real_smoke_verified": true
+  },
+  "evaluation": {
+    "ablation_artifact": "training/artifacts/overnight/20260812_full_sprint/ablation_v2/ablation_summary.json",
+    "heldout_retrieval_artifact": "training/artifacts/overnight/20260812_full_sprint/retrieval_heldout.json",
+    "human_review_collector": true,
+    "preference_pair_v1": true,
+    "human_preference_collected": false
+  },
+  "known_limitations": {
+    "raw_schema_recovery_required": true,
+    "raw_schema_validity": 0.0,
+    "rejected_candidates_can_have_reported_text_overflow": true,
+    "heuristic_critic_is_not_human_aesthetic_judgment": true,
+    "reference_category_benchmark_is_optimistic": true,
+    "cta_prominence_remains_weak": true,
+    "visuals_remain_template_like_and_need_human_review": true,
+    "research_corpus_blocks_commercial_use": true
+  },
+  "acceptance": {
+    "v0.3_stable": true,
+    "v0.3.1_complete": true,
+    "v0.3.1_technically_safe": true,
+    "visual_composition_improved": true,
+    "trained_runtime_ready": true,
+    "human_review_pipeline_ready": true,
+    "ready_for_human_review": true,
+    "ready_for_v0.4_preference_training": false,
+    "production_ready": false,
+    "commercial_allowed": false
+  }
+}

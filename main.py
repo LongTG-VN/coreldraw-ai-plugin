@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import FastAPI
@@ -13,9 +14,20 @@ from starlette.requests import Request
 
 from corel_bridge import CorelDrawBridgeError, corel_bridge
 from design_bridge import DesignBridge
+from document_io import document_io
 from extended_bridge import extended_bridge
 from template_engine import TemplateEngine, TemplateRegistry, TemplateRegistryError
 from template_models import MenuRenderRequest
+from training.inference.baseline import generate_baseline_design
+from training.inference.contract import DesignGenerateRequest, DesignGenerateResponse
+from training.inference.service import (
+    TrainedDesignGenerationError,
+    TrainedDesignRequest,
+    TrainedDesignResponse,
+    TrainedDesignService,
+    TrainedDesignUnavailableError,
+    TrainedModelStatus,
+)
 from transaction_engine import DesignTransactionEngine, DesignTransactionError
 
 app = FastAPI(
@@ -39,6 +51,9 @@ app.add_middleware(
 manifest_dir = os.getenv("COREL_TEMPLATE_MANIFEST_DIR", "templates/manifests")
 template_registry = TemplateRegistry(manifest_dir)
 template_engine = TemplateEngine(template_registry, corel_bridge, extended_bridge)
+trained_design_service = TrainedDesignService.from_environment(
+    Path(__file__).resolve().parent
+)
 
 
 class CMYKColor(BaseModel):
@@ -104,6 +119,22 @@ class SaveDocumentRequest(BaseModel):
 
 class OpenDocumentRequest(BaseModel):
     file_path: str = Field(min_length=1, max_length=4_096)
+
+
+class SafeDocumentPathRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=4_096)
+    overwrite: bool = False
+
+
+class SafeOpenDocumentRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=4_096)
+
+
+class SafeExportRequest(BaseModel):
+    format: Literal["pdf", "png"]
+    path: str = Field(min_length=1, max_length=4_096)
+    dpi: int = Field(default=300, ge=72, le=1_200)
+    overwrite: bool = False
 
 
 class SetTextRequest(BaseModel):
@@ -539,6 +570,37 @@ def design_render_preview(req: PreviewRequest) -> dict[str, object]:
     }
 
 
+@app.post("/api/v1/design/save")
+def design_save() -> dict[str, object]:
+    return {"status": "success", **document_io.save_current()}
+
+
+@app.post("/api/v1/design/save-as")
+def design_save_as(req: SafeDocumentPathRequest) -> dict[str, object]:
+    return {
+        "status": "success",
+        **document_io.save_as_cdr(req.path, overwrite=req.overwrite),
+    }
+
+
+@app.post("/api/v1/design/open")
+def design_open(req: SafeOpenDocumentRequest) -> dict[str, object]:
+    return {"status": "success", **document_io.open_cdr(req.path)}
+
+
+@app.post("/api/v1/design/export")
+def design_export(req: SafeExportRequest) -> dict[str, object]:
+    return {
+        "status": "success",
+        **document_io.export(
+            req.path,
+            req.format,
+            dpi=req.dpi,
+            overwrite=req.overwrite,
+        ),
+    }
+
+
 @app.post("/api/v1/design/check")
 def design_check(req: DesignCheckRequest) -> dict[str, object]:
     return DesignBridge(corel_bridge).check_design(
@@ -568,6 +630,70 @@ def design_transaction(req: DesignTransactionRequest) -> dict[str, object]:
         min_font_size=req.min_font_size,
         require_named_objects=req.require_named_objects,
     )
+
+
+@app.exception_handler(TrainedDesignUnavailableError)
+async def handle_trained_design_unavailable(
+    _request: Request, exc: TrainedDesignUnavailableError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "status": "unavailable",
+            "code": "trained_design_unavailable",
+            "detail": str(exc),
+        },
+    )
+
+
+@app.exception_handler(TrainedDesignGenerationError)
+async def handle_trained_design_generation_error(
+    _request: Request, exc: TrainedDesignGenerationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "code": "trained_design_generation_failed",
+            "detail": str(exc),
+        },
+    )
+@app.post("/design/generate", response_model=DesignGenerateResponse)
+@app.post("/api/v1/design/generate", response_model=DesignGenerateResponse)
+def design_generate(req: DesignGenerateRequest) -> DesignGenerateResponse:
+    """Return the structured baseline contract; no trained model is implied."""
+
+    document = generate_baseline_design(
+        req.prompt,
+        req.width_mm,
+        req.height_mm,
+    )
+    return DesignGenerateResponse(
+        design=document,
+        assets=document.assets,
+        metadata={
+            "generator": document.metadata["generator"],
+            "trained_model": False,
+            "corel_transaction_endpoint": "/api/v1/design/transaction",
+        },
+    )
+
+
+@app.get("/api/v1/design/model/status", response_model=TrainedModelStatus)
+def trained_design_model_status() -> TrainedModelStatus:
+    """Report local availability without loading Qwen or allocating VRAM."""
+
+    return trained_design_service.status()
+
+
+@app.post(
+    "/api/v1/design/generate-trained",
+    response_model=TrainedDesignResponse,
+)
+def trained_design_generate(req: TrainedDesignRequest) -> TrainedDesignResponse:
+    """Run the explicit research-only trained RAG + visual pipeline."""
+
+    return trained_design_service.generate(req)
 
 
 @app.post("/api/v1/design/feedback-context")

@@ -1,0 +1,45 @@
+{
+  "experiment_id": "elem2design_smoke_qlora_v0",
+  "status": "prepared_not_executed",
+  "upstream": {
+    "repository": "microsoft/elem2design",
+    "local_path": "training/vendor/elem2design",
+    "inspected_commit": "4665358"
+  },
+  "model": {
+    "base_model": "meta-llama/Llama-3.1-8B",
+    "vision_tower": "openai/clip-vit-large-patch14-336",
+    "quantization_bits": 4,
+    "quantization_type": "nf4",
+    "double_quant": true
+  },
+  "lora": {
+    "enabled": true,
+    "rank": 16,
+    "alpha": 32,
+    "dropout": 0.05
+  },
+  "training": {
+    "max_samples": 100,
+    "max_steps": 10,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 16,
+    "learning_rate": 0.0002,
+    "max_sequence_length": 2048,
+    "gradient_checkpointing": true,
+    "seed": 42
+  },
+  "hardware_gate": {
+    "local_gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "local_vram_gb": 6,
+    "local_execution_supported": false,
+    "reason": "8B multimodal QLoRA plus CLIP and training activations exceed the verified 6GB budget."
+  },
+  "data_gate": {
+    "normalized_dataset": "training/data/research/genposter_smoke_100",
+    "license_class": "research_only",
+    "elem2design_adapter": "training/workspace/elem2design_smoke_100",
+    "training_ready": false,
+    "blocker": "Generate and validate four staged render images per sample."
+  }
+}

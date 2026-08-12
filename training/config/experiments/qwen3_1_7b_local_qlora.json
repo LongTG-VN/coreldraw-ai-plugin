@@ -1,0 +1,30 @@
+{
+  "experiment_name": "design-ai-v0.1-local-structured-planner",
+  "model_id": "Qwen/Qwen3-1.7B",
+  "model_revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+  "dataset": "genposter_smoke_100_qwen3_sft",
+  "license_class": "research_only",
+  "commercial_allowed": false,
+  "seed": 42,
+  "quantization": {
+    "load_in_4bit": true,
+    "quant_type": "nf4",
+    "double_quant": true,
+    "compute_dtype": "float16"
+  },
+  "lora": {
+    "rank": 8,
+    "alpha": 16,
+    "dropout": 0.05,
+    "target_modules": ["q_proj", "v_proj"]
+  },
+  "training": {
+    "max_sequence_length": 1664,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 4,
+    "max_steps": 5,
+    "learning_rate": 0.0002,
+    "gradient_checkpointing": true,
+    "use_cache": false
+  }
+}

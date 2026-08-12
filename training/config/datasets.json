@@ -1,0 +1,77 @@
+{
+  "schema_version": "0.1",
+  "profiles": {
+    "smoke": {
+      "max_samples": 500,
+      "description": "Validate ingestion, schema, train command, and evaluation loop."
+    },
+    "prototype": {
+      "max_samples": 5000,
+      "description": "Train the first useful research layout adapter."
+    },
+    "research": {
+      "max_samples": 25000,
+      "description": "Architecture and evaluation experiments only."
+    }
+  },
+  "sources": {
+    "genposter100k": {
+      "kind": "huggingface",
+      "dataset_id": "creative-graphic-design/GenPoster100K",
+      "split": "train",
+      "license": "CC-BY-NC-4.0",
+      "license_class": "research_only",
+      "commercial_allowed": false,
+      "streaming_default": true,
+      "role": ["layout", "typography", "poster"],
+      "notes": "Do not use this source in production/commercial checkpoints."
+    },
+    "cgl_v2": {
+      "kind": "huggingface",
+      "dataset_id": "creative-graphic-design/CGL-Dataset-v2",
+      "split": "train",
+      "license": "unknown",
+      "license_class": "research_only_unverified",
+      "commercial_allowed": false,
+      "streaming_default": true,
+      "role": ["layout", "poster", "advertising"],
+      "notes": "Commercial rights must be explicitly verified before reclassification."
+    },
+    "synthetic_owned": {
+      "kind": "local",
+      "path": "training/data/production/synthetic",
+      "license": "project_owned",
+      "license_class": "production_safe",
+      "commercial_allowed": true,
+      "role": ["layout", "preference", "corel_trajectory"],
+      "notes": "Only include prompts/assets/outputs that the project is allowed to reuse commercially."
+    },
+    "private_corel": {
+      "kind": "local",
+      "path": "training/data/production/private_corel",
+      "license": "private_company_data",
+      "license_class": "production_safe_private",
+      "commercial_allowed": true,
+      "role": ["layout", "style", "vector", "edit_trajectory"],
+      "enabled": false,
+      "notes": "Enable only after the private archive has been exported/normalized and permission is confirmed."
+    }
+  },
+  "upstreams": {
+    "elem2design": {
+      "url": "https://github.com/microsoft/elem2design.git",
+      "priority": 1,
+      "purpose": "Layered layout/design composition baseline"
+    },
+    "llm4svg": {
+      "url": "https://github.com/ximinng/LLM4SVG.git",
+      "priority": 2,
+      "purpose": "Editable SVG/vector generation research"
+    },
+    "poster_reward": {
+      "url": "https://github.com/MeiGen-AI/PosterReward.git",
+      "priority": 3,
+      "purpose": "Optional visual critic/reward research"
+    }
+  }
+}

@@ -172,6 +172,7 @@ class FakeApplication:
         self.ActiveDocument = FakeDocument(self.layer)
         self.Documents = SimpleNamespace(Count=1)
         self.last_export_options = None
+        self.last_palette_options = None
         self.opened_path = None
 
     def CreateDocument(self):
@@ -190,6 +191,10 @@ class FakeApplication:
     def CreateStructExportOptions(self):
         self.last_export_options = SimpleNamespace()
         return self.last_export_options
+
+    def CreateStructPaletteOptions(self):
+        self.last_palette_options = SimpleNamespace()
+        return self.last_palette_options
 
 
 @pytest.fixture

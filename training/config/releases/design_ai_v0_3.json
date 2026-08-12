@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0",
+  "release": {
+    "name": "Design AI",
+    "version": "0.3",
+    "milestone": "Reference-Grounded Design RAG",
+    "status": "verified_clean_research_checkpoint",
+    "production_ready": false,
+    "commercial_allowed": false,
+    "next_milestone": "v0.3.1 Visual Composition Engine"
+  },
+  "model": {
+    "model_id": "Qwen/Qwen3-1.7B",
+    "model_revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+    "adapter_checkpoint": "training/artifacts/runs/20260809_qwen3_1_7b_smoke/checkpoint-5",
+    "trained_model": true,
+    "retrained_for_v0.3": false,
+    "quantization": "NF4 4-bit QLoRA",
+    "lora_rank": 8,
+    "lora_alpha": 16
+  },
+  "reference_corpus": {
+    "reference_count": 165,
+    "genposter_structural_count": 100,
+    "project_owned_structural_template_count": 65,
+    "top_k": 5,
+    "strategy": "weighted similarity + deterministic MMR",
+    "research_only": true,
+    "commercial_allowed": false,
+    "license_reason": "mixed corpus includes GenPoster CC-BY-NC-4.0"
+  },
+  "clean_validation": {
+    "validated_from_commit": "39dcbf64e86dd463746d5feb4adcc35e00524ceb",
+    "artifact_root": "training/artifacts/benchmarks/20260809_design_v0_3_clean_validation",
+    "prompt_count": 13,
+    "fresh_candidate_count": 52,
+    "reused_candidate_count": 0,
+    "strict_schema_valid_count": 52,
+    "raw_schema_valid_count": 0,
+    "average_candidate_latency_seconds": 54.211896,
+    "peak_vram_gib": 1.445169,
+    "combined_score_improvement_percent": 11.225728,
+    "all_automatic_success_gates_pass": true,
+    "human_preference_collected": false
+  },
+  "metrics": {
+    "v0.2_fair": {
+      "combined": 0.744974792,
+      "technical": 0.580140556,
+      "overlap": 0.0412768,
+      "spacing": 0.875354372,
+      "hierarchy": 0.663317341,
+      "text_fit": 0.456410256,
+      "coverage": 0.457238988,
+      "candidate_diversity": 0.212174874,
+      "schema_validity": 1.0
+    },
+    "v0.3_clean": {
+      "combined": 0.828603638,
+      "technical": 0.863638563,
+      "overlap": 0.0,
+      "spacing": 0.88557435,
+      "hierarchy": 0.68996523,
+      "text_fit": 0.942307692,
+      "coverage": 0.317489274,
+      "candidate_diversity": 0.240638734,
+      "schema_validity": 1.0
+    }
+  },
+  "runtime_surface": {
+    "reference_rag_cli": true,
+    "corel_operations_compilation": true,
+    "fastapi_design_generate": "baseline_only",
+    "note": "The trained v0.3 RAG pipeline is an offline/local training inference path and is not yet wired into /api/v1/design/generate."
+  },
+  "known_limitations": {
+    "raw_schema_recovery_required": true,
+    "raw_schema_validity": 0.0,
+    "coverage_regressed_vs_v0.2": true,
+    "synthetic_dense_menu_values_are_not_customer_data": true,
+    "retrieval_benchmark_category_pool_is_optimistic": true,
+    "heuristic_critic_is_not_human_aesthetic_judgment": true,
+    "visual_composition_and_branding_remain_weak": true
+  },
+  "acceptance": {
+    "v0.3_complete": true,
+    "ready_for_v0.3.1_visual_composition": true,
+    "ready_for_v0.4_preference_training": false
+  }
+}
