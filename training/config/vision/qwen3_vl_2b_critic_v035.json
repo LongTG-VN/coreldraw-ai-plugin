@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "model_id": "Qwen/Qwen3-VL-2B-Instruct",
+  "revision": "89644892e4d85e24eaac8bacfd4f463576704203",
+  "license": "Apache-2.0",
+  "quantization": "nf4_4bit",
+  "device": "auto",
+  "max_image_dimension": 768,
+  "max_new_tokens": 256,
+  "max_issues": 2,
+  "temperature": 0.0
+}
