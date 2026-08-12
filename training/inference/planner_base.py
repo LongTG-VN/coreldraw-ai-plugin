@@ -6,7 +6,7 @@ import abc
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
 
@@ -72,9 +72,30 @@ class DesignPlanV2(BaseModel):
     canvas_hash: str
 
 
+class RealPlannerResultContract(BaseModel):
+    """Strict execution audit contract for every real AI planner run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    planner_id: str
+    planner_type: Literal["neural_llm", "agent_reasoning", "fixture"]
+    model_id: str
+    model_revision: str
+    prompt_hash: str
+    input_hash: str
+    seed: int
+    raw_output: str
+    structured_output: DesignPlanV2
+    latency_seconds: float
+    started_at: str
+    completed_at: str
+    execution_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 @dataclass
 class PlannerGenerationResult:
     planner_name: str
+    planner_type: str
     brief_id: str
     candidate_index: int
     layout_family: str
@@ -82,14 +103,18 @@ class PlannerGenerationResult:
     plan_v2: DesignPlanV2
     latency_seconds: float
     raw_output: str = ""
+    request_prompt: str = ""
+    started_at: str = ""
+    completed_at: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseDesignPlanner(abc.ABC):
     """Abstract base planner enforcing the same output contract across planners."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, planner_type: str = "neural_llm") -> None:
         self.name = name
+        self.planner_type = planner_type
 
     @abc.abstractmethod
     def plan(
