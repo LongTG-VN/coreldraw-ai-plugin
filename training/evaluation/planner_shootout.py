@@ -1,31 +1,26 @@
-"""Shootout benchmark generator comparing Antigravity and Qwen3-1.7B design planners."""
+"""Deterministic planner-adapter framework smoke.
+
+The historical file name is preserved for compatibility, but this module does not
+represent an Antigravity-vs-Qwen AI benchmark. Both planners are deterministic
+fixtures. The runner validates shared contracts/artifact plumbing only and never
+creates human-review labels or fake CorelDRAW files.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import random
 import time
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from training.evaluation.benchmark_briefs import BENCHMARK_BRIEFS
 from training.inference.corel_compiler import compile_corel_operations
-from training.inference.planner_base import (
-    BaseDesignPlanner,
-    ContentLockSpec,
-    validate_content_lock,
-)
-from training.inference.planners import AntigravityDesignPlanner, QwenDesignPlanner
+from training.inference.planner_base import BaseDesignPlanner, validate_content_lock
+from training.inference.planners import FixtureAntigravityPlanner, FixtureQwenPlanner
 from training.inference.preview import render_preview
-from training.preference.v04.models import (
-    CandidateArtifactV1,
-    ReviewQueueItemV1,
-)
-from training.schemas.design import DesignDocument
 
 
 DEFAULT_BENCHMARK_ROOT = Path(
@@ -37,263 +32,165 @@ def run_planner_shootout(
     output_root: Path = DEFAULT_BENCHMARK_ROOT,
     seed: int = 42,
 ) -> dict[str, Any]:
-    """Execute the full controlled shootout benchmark between Antigravity and Qwen."""
-
+    """Run the deterministic adapter framework smoke; never produce preference data."""
     output_root.mkdir(parents=True, exist_ok=True)
-    random.seed(seed)
 
-    qwen_planner = QwenDesignPlanner()
-    antigravity_planner = AntigravityDesignPlanner()
-
-    planners: list[BaseDesignPlanner] = [qwen_planner, antigravity_planner]
-
+    planners: list[BaseDesignPlanner] = [FixtureQwenPlanner(), FixtureAntigravityPlanner()]
     results_by_planner: dict[str, list[dict[str, Any]]] = {
         "Qwen3-1.7B": [],
         "Antigravity": [],
     }
+    all_candidates: list[dict[str, Any]] = []
+    anonymous_counter = 1
 
-    all_candidates_flat: list[dict[str, Any]] = []
-    anonymous_id_counter = 1
-
-    # Manifest metadata
     manifest = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "benchmark_id": "20260812_antigravity_vs_qwen_planner",
+        "benchmark_validity": "DETERMINISTIC_ADAPTER_FRAMEWORK_SMOKE",
+        "valid_for_ai_planner_comparison": False,
+        "planners_are_fixtures": True,
+        "human_review_ready": False,
+        "review_queue_created": False,
+        "real_cdr_verified": False,
+        "commercial_allowed": False,
         "briefs_count": len(BENCHMARK_BRIEFS),
         "candidates_per_brief": 4,
         "total_target_candidates": 40,
-        "planners": ["Qwen3-1.7B", "Antigravity"],
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    # Save manifest
-    with open(output_root / "manifest.json", "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
-
-    # Process all briefs and planners
     for brief in BENCHMARK_BRIEFS:
         for planner in planners:
-            planner_slug = "qwen" if planner.name == "Qwen3-1.7B" else "antigravity"
+            planner_slug = "qwen_fixture" if planner.name == "Qwen3-1.7B" else "antigravity_fixture"
             brief_dir = output_root / planner_slug / brief.brief_id
             brief_dir.mkdir(parents=True, exist_ok=True)
 
-            for c_idx in range(4):
-                cand_dir = brief_dir / f"candidate_{c_idx + 1}"
-                cand_dir.mkdir(parents=True, exist_ok=True)
+            for candidate_index in range(4):
+                candidate_dir = brief_dir / f"candidate_{candidate_index + 1}"
+                candidate_dir.mkdir(parents=True, exist_ok=True)
+                result = planner.plan(brief, candidate_index=candidate_index, seed=seed + candidate_index)
 
-                res = planner.plan(brief, candidate_index=c_idx, seed=seed + c_idx)
+                design_path = candidate_dir / "design.json"
+                design_path.write_text(result.document.model_dump_json(indent=2), encoding="utf-8")
+                (candidate_dir / "planner_output.json").write_text(
+                    result.plan_v2.model_dump_json(indent=2), encoding="utf-8"
+                )
 
-                # Save design.json
-                doc_path = cand_dir / "design.json"
-                with open(doc_path, "w", encoding="utf-8") as f:
-                    f.write(res.document.model_dump_json(indent=2))
+                operations = compile_corel_operations(result.document)
+                operations_path = candidate_dir / "corel_operations.json"
+                operations_path.write_text(json.dumps(operations, indent=2), encoding="utf-8")
 
-                # Save planner_output.json
-                plan_path = cand_dir / "planner_output.json"
-                with open(plan_path, "w", encoding="utf-8") as f:
-                    f.write(res.plan_v2.model_dump_json(indent=2))
+                preview_path = candidate_dir / "preview.png"
+                render_preview(result.document, preview_path, max_dimension=800)
 
-                # Compile Corel operations
-                ops = compile_corel_operations(res.document)
-                ops_path = cand_dir / "corel_operations.json"
-                with open(ops_path, "w", encoding="utf-8") as f:
-                    json.dump(ops, f, indent=2)
+                (candidate_dir / "cdr_request.json").write_text(
+                    json.dumps(
+                        {
+                            "status": "NOT_GENERATED_REQUIRES_REAL_COREL_API",
+                            "requested_output_name": "output.cdr",
+                            "real_cdr_verified": False,
+                            "design_path": str(design_path),
+                            "corel_operations_path": str(operations_path),
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
 
-                # Render preview PNG
-                png_path = cand_dir / "preview.png"
-                render_preview(res.document, png_path, max_dimension=800)
-
-                # Output CDR artifact (mock / placeholder for headless test environments)
-                cdr_path = cand_dir / "output.cdr"
-                if not cdr_path.exists():
-                    with open(cdr_path, "wb") as f:
-                        f.write(b"MOCK_CDR_BINARY_HEADER_" + res.document.sample_id.encode("utf-8"))
-
-                # Metrics for candidate
-                content_valid = validate_content_lock(res.document, brief)
-                content_sha256 = hashlib.sha256(png_path.read_bytes()).hexdigest()
-
-                anon_id = f"DESIGN_{anonymous_id_counter:03d}"
-                anonymous_id_counter += 1
-
-                cand_meta = {
-                    "anonymous_id": anon_id,
+                anonymous_id = f"FIXTURE_DESIGN_{anonymous_counter:03d}"
+                anonymous_counter += 1
+                metadata = {
+                    "anonymous_id": anonymous_id,
                     "planner_name": planner.name,
+                    "planner_type": result.planner_type,
                     "brief_id": brief.brief_id,
                     "category": brief.category,
-                    "candidate_index": c_idx + 1,
-                    "layout_family": res.layout_family,
-                    "latency_seconds": res.latency_seconds,
-                    "content_valid": content_valid,
-                    "design_path": str(doc_path),
-                    "preview_path": str(png_path),
-                    "cdr_path": str(cdr_path),
-                    "content_sha256": content_sha256,
+                    "candidate_index": candidate_index + 1,
+                    "layout_family": result.layout_family,
+                    "latency_seconds": result.latency_seconds,
+                    "content_valid": validate_content_lock(result.document, brief),
+                    "design_path": str(design_path),
+                    "preview_path": str(preview_path),
+                    "cdr_path": None,
+                    "real_cdr_verified": False,
+                    "content_sha256": hashlib.sha256(preview_path.read_bytes()).hexdigest(),
                 }
+                (candidate_dir / "metrics.json").write_text(
+                    json.dumps(metadata, indent=2), encoding="utf-8"
+                )
+                (candidate_dir / "provenance.json").write_text(
+                    json.dumps(
+                        {
+                            "benchmark_sample_data": True,
+                            "planner": planner.name,
+                            "planner_type": "fixture",
+                            "ai_planner_invoked": False,
+                            "license_class": "SYNTHETIC_FIXTURE",
+                            "commercial_allowed": False,
+                            "real_cdr_verified": False,
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
 
-                # Save metrics.json
-                with open(cand_dir / "metrics.json", "w", encoding="utf-8") as f:
-                    json.dump(cand_meta, f, indent=2)
+                results_by_planner[planner.name].append(metadata)
+                all_candidates.append(metadata)
 
-                # Save provenance.json
-                prov = {
-                    "benchmark_sample_data": True,
-                    "customer_provided": False,
-                    "license_class": "CC0_or_project_owned",
-                    "commercial_allowed": True,
-                    "planner": planner.name,
-                }
-                with open(cand_dir / "provenance.json", "w", encoding="utf-8") as f:
-                    json.dump(prov, f, indent=2)
+    audit_dir = output_root / "framework_audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    _create_contact_sheets(all_candidates, audit_dir)
 
-                results_by_planner[planner.name].append(cand_meta)
-                all_candidates_flat.append(cand_meta)
-
-    # Build Blind Pairwise Review Queue
-    blind_dir = output_root / "blind_review"
-    blind_dir.mkdir(parents=True, exist_ok=True)
-
-    queue_items: list[dict[str, Any]] = []
-    blind_mapping: dict[str, dict[str, str]] = {}
-    pair_count = 1
-
-    qwen_cands = results_by_planner["Qwen3-1.7B"]
-    ag_cands = results_by_planner["Antigravity"]
-
-    # Match candidates per brief (4 pairings per brief = 20 pairs total)
-    for brief in BENCHMARK_BRIEFS:
-        q_brief_cands = [c for c in qwen_cands if c["brief_id"] == brief.brief_id]
-        a_brief_cands = [c for c in ag_cands if c["brief_id"] == brief.brief_id]
-
-        for q_cand, a_cand in zip(q_brief_cands, a_brief_cands):
-            pair_hex = f"{pair_count:024x}"
-            pair_id = f"pair:{pair_hex}"
-            pair_count += 1
-
-            # Deterministic left/right coin flip
-            flip = random.choice([True, False])
-            left = a_cand if flip else q_cand
-            right = q_cand if flip else a_cand
-
-            cand1_art = CandidateArtifactV1(
-                design_id=left["anonymous_id"],
-                brief_id=brief.brief_id,
-                design_path=left["design_path"],
-                preview_path=left["preview_path"],
-                content_sha256=left["content_sha256"],
-                generation_source=left["planner_name"],
-                technically_eligible=True,
-                provenance={"planner": left["planner_name"]},
-                license_class="CC0_or_project_owned",
-                commercial_allowed=True,
-            )
-
-            cand2_art = CandidateArtifactV1(
-                design_id=right["anonymous_id"],
-                brief_id=brief.brief_id,
-                design_path=right["design_path"],
-                preview_path=right["preview_path"],
-                content_sha256=right["content_sha256"],
-                generation_source=right["planner_name"],
-                technically_eligible=True,
-                provenance={"planner": right["planner_name"]},
-                license_class="CC0_or_project_owned",
-                commercial_allowed=True,
-            )
-
-            item = ReviewQueueItemV1(
-                pair_id=pair_id,
-                brief_id=brief.brief_id,
-                prompt=f"Brief: {brief.business_name} - {brief.headline}",
-                category=brief.category,
-                candidate_1=cand1_art,
-                candidate_2=cand2_art,
-                pairing_stage="cross",
-                benchmark_sample_data=True,
-                customer_provided=False,
-                provenance={"shootout_benchmark": "20260812_antigravity_vs_qwen_planner"},
-                license_class="CC0_or_project_owned",
-                commercial_allowed=True,
-            )
-
-            queue_items.append(item.model_dump())
-            blind_mapping[pair_id] = {
-                "design_a_id": left["anonymous_id"],
-                "design_a_planner": left["planner_name"],
-                "design_b_id": right["anonymous_id"],
-                "design_b_planner": right["planner_name"],
-            }
-
-    # Write review_queue.jsonl
-    queue_file = blind_dir / "review_queue.jsonl"
-    with open(queue_file, "w", encoding="utf-8") as f:
-        for item in queue_items:
-            f.write(json.dumps(item) + "\n")
-
-    # Write blind_mapping.json
-    with open(blind_dir / "blind_mapping.json", "w", encoding="utf-8") as f:
-        json.dump(blind_mapping, f, indent=2)
-
-    # Generate Contact Sheets
-    _create_contact_sheets(all_candidates_flat, blind_dir)
-
-    # Calculate Metrics Summary
-    metrics_summary = {
-        "total_candidates": len(all_candidates_flat),
-        "qwen_candidate_count": len(results_by_planner["Qwen3-1.7B"]),
-        "antigravity_candidate_count": len(results_by_planner["Antigravity"]),
-        "qwen_technical_pass_rate": sum(1 for c in results_by_planner["Qwen3-1.7B"] if c["content_valid"]) / 20.0,
-        "antigravity_technical_pass_rate": sum(1 for c in results_by_planner["Antigravity"] if c["content_valid"]) / 20.0,
-        "qwen_distinct_layout_families": len({c["layout_family"] for c in results_by_planner["Qwen3-1.7B"]}),
-        "antigravity_distinct_layout_families": len({c["layout_family"] for c in results_by_planner["Antigravity"]}),
-        "pairs_generated": len(queue_items),
-        "status": "WAITING_FOR_BLIND_HUMAN_REVIEW",
+    qwen_results = results_by_planner["Qwen3-1.7B"]
+    antigravity_results = results_by_planner["Antigravity"]
+    metrics = {
+        "status": "DETERMINISTIC_ADAPTER_FRAMEWORK_SMOKE",
+        "benchmark_validity": "NOT_VALID_FOR_AI_PLANNER_COMPARISON",
+        "total_candidates": len(all_candidates),
+        "qwen_candidate_count": len(qwen_results),
+        "antigravity_candidate_count": len(antigravity_results),
+        "qwen_technical_pass_rate": sum(1 for row in qwen_results if row["content_valid"]) / max(1, len(qwen_results)),
+        "antigravity_technical_pass_rate": sum(1 for row in antigravity_results if row["content_valid"]) / max(1, len(antigravity_results)),
+        "qwen_distinct_layout_families": len({row["layout_family"] for row in qwen_results}),
+        "antigravity_distinct_layout_families": len({row["layout_family"] for row in antigravity_results}),
+        "pairs_generated": 0,
+        "human_review_ready": False,
+        "review_queue_created": False,
+        "real_cdr_verified": False,
+        "commercial_allowed": False,
     }
-
     metrics_dir = output_root / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
-    with open(metrics_dir / "shootout_metrics.json", "w", encoding="utf-8") as f:
-        json.dump(metrics_summary, f, indent=2)
-
-    return metrics_summary
+    (metrics_dir / "shootout_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    return metrics
 
 
 def _create_contact_sheets(candidates: list[dict[str, Any]], output_dir: Path) -> None:
-    """Create hidden anonymous and unblinded contact sheets for candidate audit."""
-
+    """Create clearly labeled fixture-only contact sheets for pipeline audit."""
     cols = 5
     rows = (len(candidates) + cols - 1) // cols
     tile_w, tile_h = 300, 420
-    sheet_w, sheet_h = cols * tile_w, rows * tile_h
+    sheet = Image.new("RGB", (cols * tile_w, rows * tile_h), "#0F172A")
+    draw = ImageDraw.Draw(sheet)
 
-    # 1. Hidden Anonymous Contact Sheet
-    hidden_sheet = Image.new("RGB", (sheet_w, sheet_h), "#1E293B")
-    draw_h = ImageDraw.Draw(hidden_sheet)
-
-    # 2. Unblinded Audit Contact Sheet
-    unblinded_sheet = Image.new("RGB", (sheet_w, sheet_h), "#0F172A")
-    draw_u = ImageDraw.Draw(unblinded_sheet)
-
-    for idx, c in enumerate(candidates):
-        r, col = idx // cols, idx % cols
-        x, y = col * tile_w, r * tile_h
-
-        preview_img = Image.open(c["preview_path"]).resize((tile_w - 20, tile_h - 70))
-
-        # Paste preview in hidden sheet
-        hidden_sheet.paste(preview_img, (x + 10, y + 10))
-        draw_h.rectangle([x + 10, y + tile_h - 55, x + tile_w - 10, y + tile_h - 10], fill="#334155")
-        draw_h.text((x + 20, y + tile_h - 45), f"{c['anonymous_id']} ({c['category']})", fill="white")
-
-        # Paste preview in unblinded sheet
-        unblinded_sheet.paste(preview_img, (x + 10, y + 10))
-        draw_u.rectangle([x + 10, y + tile_h - 55, x + tile_w - 10, y + tile_h - 10], fill="#1E293B")
-        draw_u.text(
-            (x + 20, y + tile_h - 50),
-            f"{c['anonymous_id']} - {c['planner_name']}",
-            fill="#38BDF8" if c["planner_name"] == "Antigravity" else "#F43F5E",
+    for index, candidate in enumerate(candidates):
+        row, col = divmod(index, cols)
+        x, y = col * tile_w, row * tile_h
+        with Image.open(candidate["preview_path"]) as raw:
+            image = raw.convert("RGB")
+            image.thumbnail((tile_w - 20, tile_h - 70))
+            sheet.paste(image, (x + 10, y + 10))
+        draw.rectangle([x + 10, y + tile_h - 55, x + tile_w - 10, y + tile_h - 10], fill="#1E293B")
+        draw.text(
+            (x + 20, y + tile_h - 48),
+            f"{candidate['anonymous_id']} - FIXTURE",
+            fill="#F59E0B",
         )
-        draw_u.text((x + 20, y + tile_h - 30), f"{c['category']} | {c['layout_family']}", fill="#94A3B8")
+        draw.text(
+            (x + 20, y + tile_h - 28),
+            f"{candidate['planner_name']} | {candidate['category']} | {candidate['layout_family']}",
+            fill="#94A3B8",
+        )
 
-    hidden_sheet.save(output_dir / "planner_candidates_hidden_contact_sheet.png")
-    unblinded_sheet.save(output_dir / "planner_candidates_unblinded_audit.png")
+    sheet.save(output_dir / "deterministic_adapter_contact_sheet.png")
