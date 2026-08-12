@@ -35,6 +35,10 @@ def resolve_queue_path(queue: str) -> Path:
             "training/artifacts/benchmarks/20260812_gold_design_grammar_pilot/"
             "comparisons/review_queue.jsonl"
         ),
+        "real_gold_grammar_pilot_v1": Path(
+            "training/artifacts/benchmarks/20260812_real_gold_grammar_pilot/"
+            "comparisons/review_queue.jsonl"
+        ),
     }
     return aliases.get(queue, Path(queue))
 
