@@ -1,4 +1,12 @@
-"""Real Gold Reference Grammar Pilot generator producing 8 real-adapted candidates and 2 baseline candidates."""
+"""Stabilized real-reference Gold Grammar research pilot.
+
+The runner is intentionally conservative:
+- source IDs must be explicitly human-approved;
+- research-dataset rights remain non-commercial;
+- no fake ``.cdr`` file is ever written;
+- a fixture planner is never silently presented as a real baseline;
+- provenance checks do not claim more than they verify.
+"""
 
 from __future__ import annotations
 
@@ -11,14 +19,20 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
-from training.evaluation.benchmark_briefs import ContentLockSpec, get_brief_by_id
+from training.evaluation.benchmark_briefs import get_brief_by_id
 from training.gold.adapter import GoldDesignAdapter
-from training.gold.real_pipeline import build_real_gold_library
+from training.gold.real_pipeline import (
+    DEFAULT_APPROVED_MANIFEST_PATH,
+    DEFAULT_DATASET_PATH,
+    GENPOSTER_COMMERCIAL_ALLOWED,
+    GENPOSTER_LICENSE_CLASS,
+    GoldSourceApprovalRequired,
+    GoldSourceManifestError,
+    build_real_gold_library,
+)
 from training.inference.corel_compiler import compile_corel_operations
-from training.inference.planners import FixtureQwenPlanner
+from training.inference.planner_base import BaseDesignPlanner
 from training.inference.preview import render_preview
-from training.preference.v04.models import CandidateArtifactV1, ReviewQueueItemV1
-from training.schemas.design import DesignDocument
 
 
 REAL_PILOT_ROOT = Path("training/artifacts/benchmarks/20260812_real_gold_grammar_pilot")
@@ -27,330 +41,303 @@ REAL_PILOT_ROOT = Path("training/artifacts/benchmarks/20260812_real_gold_grammar
 def run_real_gold_grammar_pilot(
     output_root: Path = REAL_PILOT_ROOT,
     seed: int = 42,
+    *,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    approved_manifest_path: Path = DEFAULT_APPROVED_MANIFEST_PATH,
+    baseline_planner: BaseDesignPlanner | None = None,
 ) -> dict[str, Any]:
-    """Execute the Phase 1.3b Real Reference Gold Grammar Pilot for SALE and SPA."""
+    """Run a research-only SALE/SPA adaptation pilot from approved source IDs.
 
+    The function never produces a CorelDRAW file by itself. It prepares validated
+    operations for the existing real Corel Design API and records that export as a
+    pending external step.
+    """
     output_root.mkdir(parents=True, exist_ok=True)
     random.seed(seed)
 
-    # 1. Build Real Gold Library & Source Inventory from actual source designs
-    real_grammars, inventory = build_real_gold_library()
+    try:
+        real_grammars, inventory = build_real_gold_library(
+            dataset_path=dataset_path,
+            approved_manifest_path=approved_manifest_path,
+        )
+    except GoldSourceApprovalRequired as exc:
+        return {
+            "status": "WAITING_FOR_SOURCE_HUMAN_APPROVAL",
+            "conclusion": "SOURCE_APPROVAL_REQUIRED",
+            "pilot_generated": False,
+            "reason": str(exc),
+            "commercial_allowed": False,
+        }
+    except GoldSourceManifestError as exc:
+        return {
+            "status": "REAL_GOLD_SOURCE_MANIFEST_INVALID",
+            "conclusion": "SOURCE_MANIFEST_INVALID",
+            "pilot_generated": False,
+            "reason": str(exc),
+            "commercial_allowed": False,
+        }
 
-    brief_sale = get_brief_by_id("brief_sale_01")
-    brief_spa = get_brief_by_id("brief_spa_01")
-    target_briefs = [brief_sale, brief_spa]
-
+    target_briefs = [get_brief_by_id("brief_sale_01"), get_brief_by_id("brief_spa_01")]
     adapter = GoldDesignAdapter()
-    baseline_planner = FixtureQwenPlanner()
 
-    all_real_candidates: list[dict[str, Any]] = []
+    all_candidates: list[dict[str, Any]] = []
     baseline_candidates: list[dict[str, Any]] = []
-
     gold_dir = output_root / "real_gold_candidates"
     gold_dir.mkdir(parents=True, exist_ok=True)
+    baseline_dir = output_root / "baseline_candidates"
+    baseline_dir.mkdir(parents=True, exist_ok=True)
 
-    base_dir = output_root / "baseline_candidates"
-    base_dir.mkdir(parents=True, exist_ok=True)
-
-    cand_counter = 1
-
-    # 2. Generate Baseline and Real-Adapted Candidates
+    candidate_counter = 1
     for brief in target_briefs:
-        cat = brief.category
-        cat_grammars = [g for g in real_grammars if g.category.upper() == cat.upper()]
-
-        if len(cat_grammars) < 3:
+        category_grammars = [g for g in real_grammars if g.category.upper() == brief.category.upper()]
+        if len(category_grammars) < 3:
             return {
                 "status": "REAL_GOLD_SOURCE_DATA_REQUIRED",
-                "reason": f"Fewer than 3 real sources found for category {cat}",
+                "conclusion": "INSUFFICIENT_APPROVED_SOURCES",
                 "pilot_generated": False,
+                "category": brief.category,
+                "approved_source_count": len(category_grammars),
+                "commercial_allowed": False,
             }
 
-        # Baseline Candidate (1 per brief)
-        base_cat_dir = base_dir / cat.lower()
-        base_cat_dir.mkdir(parents=True, exist_ok=True)
-        base_res = baseline_planner.plan(brief, candidate_index=0, seed=seed)
+        if baseline_planner is not None:
+            baseline_result = baseline_planner.plan(brief, candidate_index=0, seed=seed)
+            base_category_dir = baseline_dir / brief.category.lower()
+            base_category_dir.mkdir(parents=True, exist_ok=True)
+            base_design_path = base_category_dir / "design.json"
+            base_design_path.write_text(
+                baseline_result.document.model_dump_json(indent=2), encoding="utf-8"
+            )
+            base_preview_path = base_category_dir / "preview.png"
+            render_preview(baseline_result.document, base_preview_path, max_dimension=800)
+            baseline_candidates.append(
+                {
+                    "category": brief.category,
+                    "brief_id": brief.brief_id,
+                    "design_path": str(base_design_path),
+                    "preview_path": str(base_preview_path),
+                    "planner_name": baseline_result.planner_name,
+                    "planner_type": baseline_result.planner_type,
+                    "eligible_for_human_baseline_claim": baseline_result.planner_type != "fixture",
+                }
+            )
 
-        base_doc_path = base_cat_dir / "design.json"
-        with open(base_doc_path, "w", encoding="utf-8") as f:
-            f.write(base_res.document.model_dump_json(indent=2))
+        category_dir = gold_dir / brief.category.lower()
+        category_dir.mkdir(parents=True, exist_ok=True)
+        for candidate_index in range(4):
+            grammar = category_grammars[candidate_index % len(category_grammars)]
+            candidate_dir = category_dir / f"candidate_{candidate_index + 1}"
+            candidate_dir.mkdir(parents=True, exist_ok=True)
 
-        base_png_path = base_cat_dir / "preview.png"
-        render_preview(base_res.document, base_png_path, max_dimension=800)
+            document, adaptation_report = adapter.adapt(
+                grammar,
+                brief,
+                candidate_index=candidate_index,
+                seed=seed + candidate_index,
+            )
+            design_path = candidate_dir / "design.json"
+            design_path.write_text(document.model_dump_json(indent=2), encoding="utf-8")
+            (candidate_dir / "grammar.json").write_text(
+                grammar.model_dump_json(indent=2), encoding="utf-8"
+            )
 
-        base_meta = {
-            "category": cat,
-            "brief_id": brief.brief_id,
-            "design_path": str(base_doc_path),
-            "preview_path": str(base_png_path),
-        }
-        baseline_candidates.append(base_meta)
-
-        # Real Gold Adapted Candidates (4 per category)
-        cat_gold_dir = gold_dir / cat.lower()
-        cat_gold_dir.mkdir(parents=True, exist_ok=True)
-
-        for c_idx in range(4):
-            grammar = cat_grammars[c_idx % len(cat_grammars)]
-            c_dir = cat_gold_dir / f"candidate_{c_idx + 1}"
-            c_dir.mkdir(parents=True, exist_ok=True)
-
-            doc, adapt_report = adapter.adapt(grammar, brief, candidate_index=c_idx, seed=seed + c_idx)
-
-            # Save design.json
-            doc_path = c_dir / "design.json"
-            with open(doc_path, "w", encoding="utf-8") as f:
-                f.write(doc.model_dump_json(indent=2))
-
-            # Save grammar.json
-            with open(c_dir / "grammar.json", "w", encoding="utf-8") as f:
-                f.write(grammar.model_dump_json(indent=2))
-
-            # Save source_reference.json
-            src_ref = {
+            source_reference = {
                 "source_design_id": grammar.provenance.get("source_design_id"),
                 "source_sha256": grammar.provenance.get("source_sha256"),
-                "extracted_from_real_design": True,
+                "extracted_from_real_design": grammar.provenance.get("extracted_from_real_design") is True,
                 "gold_status": grammar.gold_status,
+                "human_quality_status": grammar.provenance.get("human_quality_status"),
+                "human_approved": grammar.provenance.get("human_approved") is True,
+                "license_class": grammar.provenance.get("license_class"),
+                "commercial_allowed": bool(grammar.provenance.get("commercial_allowed", False)),
             }
-            with open(c_dir / "source_reference.json", "w", encoding="utf-8") as f:
-                json.dump(src_ref, f, indent=2)
+            (candidate_dir / "source_reference.json").write_text(
+                json.dumps(source_reference, indent=2), encoding="utf-8"
+            )
+            (candidate_dir / "adaptation_report.json").write_text(
+                json.dumps(adaptation_report, indent=2), encoding="utf-8"
+            )
 
-            # Save adaptation_report.json
-            with open(c_dir / "adaptation_report.json", "w", encoding="utf-8") as f:
-                json.dump(adapt_report, f, indent=2)
+            operations = compile_corel_operations(document)
+            operations_path = candidate_dir / "corel_operations.json"
+            operations_path.write_text(json.dumps(operations, indent=2), encoding="utf-8")
 
-            # Compile Corel operations
-            ops = compile_corel_operations(doc)
-            with open(c_dir / "corel_operations.json", "w", encoding="utf-8") as f:
-                json.dump(ops, f, indent=2)
+            preview_path = candidate_dir / "preview.png"
+            render_preview(document, preview_path, max_dimension=800)
 
-            # Render preview PNG
-            png_path = c_dir / "preview.png"
-            render_preview(doc, png_path, max_dimension=800)
+            # IMPORTANT: Do not write a placeholder output.cdr. A real CDR must be
+            # created by the verified Corel Design API on Windows/CorelDRAW.
+            cdr_request = {
+                "status": "NOT_GENERATED_REQUIRES_REAL_COREL_API",
+                "design_path": str(design_path),
+                "corel_operations_path": str(operations_path),
+                "requested_output_name": "output.cdr",
+                "real_cdr_verified": False,
+            }
+            (candidate_dir / "cdr_request.json").write_text(
+                json.dumps(cdr_request, indent=2), encoding="utf-8"
+            )
 
-            # Save output.cdr
-            cdr_path = c_dir / "output.cdr"
-            with open(cdr_path, "wb") as f:
-                f.write(b"REAL_GOLD_CDR_HEADER_" + doc.sample_id.encode("utf-8"))
-
-            content_sha = hashlib.sha256(png_path.read_bytes()).hexdigest()
-            anon_id = f"REAL_GOLD_{cand_counter:03d}"
-            cand_counter += 1
-
-            meta = {
-                "anonymous_id": anon_id,
+            anonymous_id = f"REAL_GOLD_{candidate_counter:03d}"
+            candidate_counter += 1
+            metadata = {
+                "anonymous_id": anonymous_id,
                 "grammar_id": grammar.grammar_id,
-                "grammar_name": grammar.grammar_name,
-                "source_design_id": grammar.provenance.get("source_design_id"),
-                "source_sha256": grammar.provenance.get("source_sha256"),
-                "extracted_from_real_design": True,
-                "gold_status": grammar.gold_status,
-                "category": cat,
+                "source_design_id": source_reference["source_design_id"],
+                "source_sha256": source_reference["source_sha256"],
+                "category": brief.category,
                 "brief_id": brief.brief_id,
-                "candidate_index": c_idx + 1,
-                "design_path": str(doc_path),
-                "preview_path": str(png_path),
-                "cdr_path": str(cdr_path),
-                "content_sha256": content_sha,
-                "adaptation": adapt_report,
+                "candidate_index": candidate_index + 1,
+                "design_path": str(design_path),
+                "preview_path": str(preview_path),
+                "corel_operations_path": str(operations_path),
+                "cdr_path": None,
+                "cdr_status": cdr_request["status"],
+                "real_cdr_verified": False,
+                "content_sha256": hashlib.sha256(preview_path.read_bytes()).hexdigest(),
+                "adaptation": adaptation_report,
             }
-            with open(c_dir / "metrics.json", "w", encoding="utf-8") as f:
-                json.dump(meta, f, indent=2)
-
-            prov = {
+            (candidate_dir / "metrics.json").write_text(
+                json.dumps(metadata, indent=2), encoding="utf-8"
+            )
+            provenance = {
                 "benchmark_sample_data": True,
                 "customer_provided": False,
-                "license_class": "CC0_or_project_owned",
-                "commercial_allowed": True,
+                "license_class": GENPOSTER_LICENSE_CLASS,
+                "commercial_allowed": GENPOSTER_COMMERCIAL_ALLOWED,
+                "project_owned": False,
                 "extracted_from_real_design": True,
-                "source_sha256": grammar.provenance.get("source_sha256"),
+                "human_approved_source": True,
+                "source_sha256": source_reference["source_sha256"],
+                "real_cdr_verified": False,
             }
-            with open(c_dir / "provenance.json", "w", encoding="utf-8") as f:
-                json.dump(prov, f, indent=2)
+            (candidate_dir / "provenance.json").write_text(
+                json.dumps(provenance, indent=2), encoding="utf-8"
+            )
+            all_candidates.append(metadata)
 
-            all_real_candidates.append(meta)
-
-    # 3. Create Contact Sheets
     _create_real_source_contact_sheet(inventory, output_root)
-    _create_real_adaptation_contact_sheet(all_real_candidates, baseline_candidates, output_root)
+    _create_real_adaptation_contact_sheet(all_candidates, baseline_candidates, output_root)
 
-    # 4. Critical Provenance Audit Gate
-    audit_report = _perform_critical_provenance_audit(all_real_candidates, output_root)
-    if audit_report["conclusion"] != "REAL_GOLD_PIPELINE_VERIFIED":
+    audit = _perform_provenance_audit(all_candidates, inventory, output_root)
+    if audit["conclusion"] != "REAL_REFERENCE_STRUCTURE_PROVENANCE_VERIFIED":
         return {
             "status": "REAL_GOLD_PIPELINE_BLOCKED",
-            "conclusion": audit_report["conclusion"],
-            "audit": audit_report,
+            "conclusion": audit["conclusion"],
+            "audit": audit,
             "pilot_generated": False,
+            "commercial_allowed": False,
         }
 
-    # 5. Build Blind Review Queue
-    comp_dir = output_root / "comparisons"
-    comp_dir.mkdir(parents=True, exist_ok=True)
-
-    queue_items: list[dict[str, Any]] = []
-    blind_map: dict[str, Any] = {}
-    pair_count = 1
-
-    for brief in target_briefs:
-        cat_gold = [c for c in all_real_candidates if c["category"] == brief.category]
-        cat_base = next(b for b in baseline_candidates if b["category"] == brief.category)
-
-        g_c = cat_gold[0]
-        pair_hex = f"{pair_count:024x}"
-        pair_id = f"pair:{pair_hex}"
-        pair_count += 1
-
-        flip = random.choice([True, False])
-        left_path = g_c if flip else cat_base
-        right_path = cat_base if flip else g_c
-
-        c1_id = g_c["anonymous_id"] if flip else f"BASE_{brief.category}"
-        c2_id = f"BASE_{brief.category}" if flip else g_c["anonymous_id"]
-
-        c1 = CandidateArtifactV1(
-            design_id=c1_id,
-            brief_id=brief.brief_id,
-            design_path=left_path["design_path"],
-            preview_path=left_path["preview_path"],
-            content_sha256=hashlib.sha256(Path(left_path["preview_path"]).read_bytes()).hexdigest(),
-            generation_source="real_gold_grammar" if flip else "baseline",
-            technically_eligible=True,
-            license_class="CC0_or_project_owned",
-            commercial_allowed=True,
-            provenance={"benchmark_sample_data": True, "extracted_from_real_design": True if flip else False},
-        )
-        c2 = CandidateArtifactV1(
-            design_id=c2_id,
-            brief_id=brief.brief_id,
-            design_path=right_path["design_path"],
-            preview_path=right_path["preview_path"],
-            content_sha256=hashlib.sha256(Path(right_path["preview_path"]).read_bytes()).hexdigest(),
-            generation_source="baseline" if flip else "real_gold_grammar",
-            technically_eligible=True,
-            license_class="CC0_or_project_owned",
-            commercial_allowed=True,
-            provenance={"benchmark_sample_data": True, "extracted_from_real_design": False if flip else True},
-        )
-
-        item = ReviewQueueItemV1(
-            pair_id=pair_id,
-            brief_id=brief.brief_id,
-            prompt=f"Real Gold Pilot: {brief.business_name} - {brief.headline}",
-            category=brief.category,
-            candidate_1=c1,
-            candidate_2=c2,
-            pairing_stage="cross",
-            benchmark_sample_data=True,
-            customer_provided=False,
-            provenance={"real_gold_pilot": "20260812_real_gold_grammar_pilot"},
-            license_class="CC0_or_project_owned",
-            commercial_allowed=True,
-        )
-        queue_items.append(item.model_dump())
-        blind_map[pair_id] = {
-            "design_a_id": c1_id,
-            "design_b_id": c2_id,
-        }
-
-    with open(comp_dir / "review_queue.jsonl", "w", encoding="utf-8") as f:
-        for item in queue_items:
-            f.write(json.dumps(item) + "\n")
-
-    with open(comp_dir / "blind_mapping.json", "w", encoding="utf-8") as f:
-        json.dump(blind_map, f, indent=2)
-
+    baseline_claim_ready = bool(baseline_candidates) and all(
+        candidate["eligible_for_human_baseline_claim"] for candidate in baseline_candidates
+    )
     return {
-        "status": "WAITING_FOR_REAL_GOLD_ADAPTATION_HUMAN_REVIEW",
-        "conclusion": "REAL_GOLD_PIPELINE_VERIFIED",
+        "status": "STABILIZED_RESEARCH_PILOT_READY",
+        "conclusion": "REAL_REFERENCE_STRUCTURE_PROVENANCE_VERIFIED",
         "pilot_generated": True,
-        "total_real_gold_candidates": len(all_real_candidates),
+        "total_real_gold_candidates": len(all_candidates),
         "total_baseline_candidates": len(baseline_candidates),
         "categories_processed": ["SALE", "SPA"],
-        "audit": audit_report,
+        "source_human_approval_verified": True,
+        "real_cdr_verified": False,
+        "cdr_export_required": True,
+        "baseline_claim_ready": baseline_claim_ready,
+        "human_comparison_queue_created": False,
+        "commercial_allowed": False,
+        "audit": audit,
     }
 
 
-def _perform_critical_provenance_audit(
+def _perform_provenance_audit(
     candidates: list[dict[str, Any]],
+    inventory: dict[str, Any],
     output_dir: Path,
 ) -> dict[str, Any]:
-    """Perform the strict critical provenance audit required by Section 21."""
+    inventory_by_id = {entry["source_id"]: entry for entry in inventory.get("sources", [])}
     audit_rows: list[dict[str, Any]] = []
     all_valid = True
 
-    for c in candidates:
-        has_source = bool(c.get("source_design_id"))
-        has_hash = bool(c.get("source_sha256"))
-        extracted_real = c.get("extracted_from_real_design") is True
-        no_manual_authoring = (c.get("gold_status") == "PROVISIONAL_REAL_REFERENCE")
+    for candidate in candidates:
+        source_id = candidate.get("source_design_id")
+        inventory_entry = inventory_by_id.get(source_id)
+        source_exists = inventory_entry is not None
+        source_hash = candidate.get("source_sha256")
+        hash_matches_inventory = bool(
+            source_exists and source_hash and source_hash == inventory_entry.get("sha256")
+        )
+        human_approved = bool(
+            source_exists and inventory_entry.get("human_quality_status") == "APPROVED"
+        )
+        rights_fail_closed = bool(
+            source_exists
+            and inventory_entry.get("license_class") == GENPOSTER_LICENSE_CLASS
+            and inventory_entry.get("commercial_allowed") is False
+            and inventory_entry.get("project_owned") is False
+        )
+        no_fake_cdr = candidate.get("cdr_path") is None and candidate.get("real_cdr_verified") is False
 
-        # Business content leakage check: ensure source text didn't bleed into adapted outputs
-        design_content = Path(c["design_path"]).read_text(encoding="utf-8")
-        no_content_leakage = ("Bunkart" not in design_content)
-
-        valid = has_source and has_hash and extracted_real and no_manual_authoring and no_content_leakage
-
-        if not valid:
-            all_valid = False
-
+        valid = source_exists and hash_matches_inventory and human_approved and rights_fail_closed and no_fake_cdr
+        all_valid = all_valid and valid
         audit_rows.append(
             {
-                "anonymous_id": c["anonymous_id"],
-                "grammar_id": c["grammar_id"],
-                "source_design_id": c.get("source_design_id"),
-                "source_sha256": c.get("source_sha256"),
-                "real_source_exists": has_source,
-                "source_hash_verified": has_hash,
-                "grammar_extracted_from_source": extracted_real,
-                "manual_geometry_authoring": not no_manual_authoring,
-                "business_content_leakage": not no_content_leakage,
-                "output_derived_from_extracted_grammar": extracted_real,
+                "anonymous_id": candidate.get("anonymous_id"),
+                "source_design_id": source_id,
+                "real_source_inventory_entry_exists": source_exists,
+                "source_hash_matches_inventory": hash_matches_inventory,
+                "human_source_approval_verified": human_approved,
+                "research_rights_fail_closed": rights_fail_closed,
+                "fake_cdr_absent": no_fake_cdr,
+                "real_cdr_verified": False,
+                "business_content_leakage_check": "NOT_CLAIMED_BY_THIS_AUDIT",
                 "valid": valid,
             }
         )
 
-    conclusion = "REAL_GOLD_PIPELINE_VERIFIED" if all_valid else "REAL_GOLD_PIPELINE_BLOCKED"
-
+    conclusion = (
+        "REAL_REFERENCE_STRUCTURE_PROVENANCE_VERIFIED"
+        if all_valid
+        else "REAL_REFERENCE_STRUCTURE_PROVENANCE_BLOCKED"
+    )
     report = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "conclusion": conclusion,
         "total_candidates_audited": len(candidates),
         "all_candidates_valid": all_valid,
+        "real_cdr_verified": False,
+        "commercial_allowed": False,
+        "scope": "source approval/hash/rights/no-fake-cdr only",
         "candidates": audit_rows,
     }
-
-    with open(output_dir / "REAL_GOLD_PROVENANCE_AUDIT.json", "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
-
+    (output_dir / "REAL_GOLD_PROVENANCE_AUDIT.json").write_text(
+        json.dumps(report, indent=2), encoding="utf-8"
+    )
     return report
 
 
 def _create_real_source_contact_sheet(inventory: dict[str, Any], output_dir: Path) -> None:
-    """Create real_gold_source_contact_sheet.png showing the 10 real source designs with source IDs only."""
     sources = inventory.get("sources", [])
-    cols = 5
-    rows = 2
+    if not sources:
+        return
+    cols = min(5, len(sources))
+    rows = (len(sources) + cols - 1) // cols
     tile_w, tile_h = 280, 390
-    sheet_w, sheet_h = cols * tile_w, rows * tile_h
-
-    sheet = Image.new("RGB", (sheet_w, sheet_h), "#0F172A")
+    sheet = Image.new("RGB", (cols * tile_w, rows * tile_h), "#0F172A")
     draw = ImageDraw.Draw(sheet)
 
-    for idx, s in enumerate(sources):
-        r, col = idx // cols, idx % cols
-        x, y = col * tile_w, r * tile_h
-
-        preview_path = Path(s["path"]) / "source_preview.png"
+    for idx, source in enumerate(sources):
+        row, col = divmod(idx, cols)
+        x, y = col * tile_w, row * tile_h
+        preview_path = Path(source["path"]) / "source_preview.png"
         if preview_path.exists():
-            img = Image.open(preview_path).resize((tile_w - 20, tile_h - 60))
-            sheet.paste(img, (x + 10, y + 10))
-
+            with Image.open(preview_path) as raw:
+                image = raw.convert("RGB")
+                image.thumbnail((tile_w - 20, tile_h - 60))
+                sheet.paste(image, (x + 10, y + 10))
         draw.rectangle([x + 10, y + tile_h - 45, x + tile_w - 10, y + tile_h - 10], fill="#1E293B")
-        draw.text((x + 15, y + tile_h - 40), f"SOURCE: {s['source_id']}", fill="#38BDF8")
-        draw.text((x + 15, y + tile_h - 24), f"CAT: {s['category']}", fill="#94A3B8")
+        draw.text((x + 15, y + tile_h - 40), f"SOURCE: {source['source_id']}", fill="#38BDF8")
+        draw.text((x + 15, y + tile_h - 24), f"CAT: {source['category']} APPROVED", fill="#94A3B8")
 
     sheet.save(output_dir / "real_gold_source_contact_sheet.png")
 
@@ -360,54 +347,50 @@ def _create_real_adaptation_contact_sheet(
     baseline_candidates: list[dict[str, Any]],
     output_dir: Path,
 ) -> None:
-    """Create real_gold_adaptation_contact_sheet.png and baseline_vs_real_gold.png."""
+    if real_candidates:
+        cols = 4
+        rows = (len(real_candidates) + cols - 1) // cols
+        tile_w, tile_h = 280, 390
+        sheet = Image.new("RGB", (cols * tile_w, rows * tile_h), "#0F172A")
+        draw = ImageDraw.Draw(sheet)
+        for idx, candidate in enumerate(real_candidates):
+            row, col = divmod(idx, cols)
+            x, y = col * tile_w, row * tile_h
+            with Image.open(candidate["preview_path"]) as raw:
+                image = raw.convert("RGB")
+                image.thumbnail((tile_w - 20, tile_h - 60))
+                sheet.paste(image, (x + 10, y + 10))
+            draw.rectangle([x + 10, y + tile_h - 45, x + tile_w - 10, y + tile_h - 10], fill="#1E293B")
+            draw.text((x + 15, y + tile_h - 40), f"{candidate['anonymous_id']} ({candidate['category']})", fill="#38BDF8")
+            draw.text((x + 15, y + tile_h - 24), f"SRC: {candidate['source_design_id']}", fill="#94A3B8")
+        sheet.save(output_dir / "real_gold_adaptation_contact_sheet.png")
 
-    # 1. Real Gold Adaptation Contact Sheet (8 candidates)
-    cols = 4
-    rows = 2
-    tile_w, tile_h = 280, 390
-    sheet_w, sheet_h = cols * tile_w, rows * tile_h
-
-    adapt_sheet = Image.new("RGB", (sheet_w, sheet_h), "#0F172A")
-    draw_a = ImageDraw.Draw(adapt_sheet)
-
-    for idx, c in enumerate(real_candidates):
-        r, col = idx // cols, idx % cols
-        x, y = col * tile_w, r * tile_h
-
-        preview_img = Image.open(c["preview_path"]).resize((tile_w - 20, tile_h - 60))
-        adapt_sheet.paste(preview_img, (x + 10, y + 10))
-
-        draw_a.rectangle([x + 10, y + tile_h - 45, x + tile_w - 10, y + tile_h - 10], fill="#1E293B")
-        draw_a.text((x + 15, y + tile_h - 40), f"{c['anonymous_id']} ({c['category']})", fill="#38BDF8")
-        draw_a.text((x + 15, y + tile_h - 24), f"SRC: {c['source_design_id']}", fill="#94A3B8")
-
-    adapt_sheet.save(output_dir / "real_gold_adaptation_contact_sheet.png")
-
-    # 2. Baseline vs Real Gold Contact Sheet
-    b_cols = 2
-    b_rows = 2
-    b_sheet_w, b_sheet_h = b_cols * tile_w, b_rows * tile_h
-
-    bv_sheet = Image.new("RGB", (b_sheet_w, b_sheet_h), "#020617")
-    draw_b = ImageDraw.Draw(bv_sheet)
-
-    for col, cat_name in enumerate(["SALE", "SPA"]):
-        b_cand = next(b for b in baseline_candidates if b["category"] == cat_name)
-        g_cand = next(c for c in real_candidates if c["category"] == cat_name)
-
-        # Baseline
-        x, y = col * tile_w, 0
-        img_b = Image.open(b_cand["preview_path"]).resize((tile_w - 20, tile_h - 60))
-        bv_sheet.paste(img_b, (x + 10, y + 10))
-        draw_b.rectangle([x + 10, y + tile_h - 45, x + tile_w - 10, y + tile_h - 10], fill="#1E293B")
-        draw_b.text((x + 15, y + tile_h - 35), f"BASELINE - {cat_name}", fill="#F43F5E")
-
-        # Real Gold
-        x, y = col * tile_w, tile_h
-        img_g = Image.open(g_cand["preview_path"]).resize((tile_w - 20, tile_h - 60))
-        bv_sheet.paste(img_g, (x + 10, y + 10))
-        draw_b.rectangle([x + 10, y + tile_h - 45, x + tile_w - 10, y + tile_h - 10], fill="#1E293B")
-        draw_b.text((x + 15, y + tile_h - 35), f"REAL GOLD ({g_cand['source_design_id']})", fill="#10B981")
-
-    bv_sheet.save(output_dir / "baseline_vs_real_gold.png")
+    # A baseline sheet is informational only. Fixture planners are explicitly labeled.
+    if baseline_candidates:
+        tile_w, tile_h = 280, 390
+        cols = len(baseline_candidates)
+        sheet = Image.new("RGB", (cols * tile_w, 2 * tile_h), "#020617")
+        draw = ImageDraw.Draw(sheet)
+        for col, baseline in enumerate(baseline_candidates):
+            x, y = col * tile_w, 0
+            with Image.open(baseline["preview_path"]) as raw:
+                image = raw.convert("RGB")
+                image.thumbnail((tile_w - 20, tile_h - 60))
+                sheet.paste(image, (x + 10, y + 10))
+            draw.text(
+                (x + 15, y + tile_h - 35),
+                f"BASELINE {baseline['planner_name']} [{baseline['planner_type']}]",
+                fill="#F43F5E",
+            )
+            gold = next(
+                (candidate for candidate in real_candidates if candidate["category"] == baseline["category"]),
+                None,
+            )
+            if gold:
+                y = tile_h
+                with Image.open(gold["preview_path"]) as raw:
+                    image = raw.convert("RGB")
+                    image.thumbnail((tile_w - 20, tile_h - 60))
+                    sheet.paste(image, (x + 10, y + 10))
+                draw.text((x + 15, y + tile_h - 35), f"ADAPTED {gold['source_design_id']}", fill="#10B981")
+        sheet.save(output_dir / "baseline_vs_real_gold.png")
