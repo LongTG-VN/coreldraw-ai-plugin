@@ -17,6 +17,7 @@ class StrictModel(BaseModel):
 
 
 class OptionalReviewScoresV1(StrictModel):
+    overall_quality: int | None = Field(default=None, ge=1, le=10)
     composition: int | None = Field(default=None, ge=1, le=10)
     hierarchy: int | None = Field(default=None, ge=1, le=10)
     typography: int | None = Field(default=None, ge=1, le=10)

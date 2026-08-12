@@ -7,9 +7,15 @@ from training.preference.v04.models import (
     ReviewQueueItemV1,
     ReviewSessionV1,
 )
+from training.preference.v04.hardening import (
+    CandidateInvariantV1,
+    CandidateStyleVariantV1,
+)
 
 __all__ = [
     "CandidateArtifactV1",
+    "CandidateInvariantV1",
+    "CandidateStyleVariantV1",
     "HumanReviewV1",
     "PreferencePairV1",
     "ReviewQueueItemV1",

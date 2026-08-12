@@ -2,6 +2,17 @@
 
 Bạn không cần sửa JSON và không cần chạy model khi chấm. Candidate đã được tạo và kiểm tra kỹ thuật trước khi vào hàng đợi.
 
+## Pilot Phase 1.1 — ưu tiên chấm trước
+
+Việc chấm pool cũ đang tạm dừng vì phản hồi chẩn đoán chỉ khoảng 4/10. Mở riêng pilot đã harden bằng lệnh:
+
+```powershell
+cd D:\codex\coreldraw-ai-plugin
+python -m training.tools.human_review_server --queue v04_phase1_1_pilot --port 8003
+```
+
+Mở `http://127.0.0.1:8003/review`. Pilot có 20 so sánh mù thuộc SPA, CAFE, SALE, MENU và SIGNAGE. Ô chất lượng tổng thể 1–10 được đặt nổi bật nhưng vẫn không bắt buộc.
+
 ## 1. Mở trang review
 
 Từ thư mục repository, chạy:

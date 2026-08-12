@@ -196,6 +196,10 @@ class ReviewStore:
                 "automated_score_used": False,
                 "benchmark_sample_data": item.benchmark_sample_data,
                 "customer_provided": item.customer_provided,
+                "generation_version": item.provenance.get(
+                    "generation_version", "diagnostic_generation_v1"
+                ),
+                "quality_floor_passed": item.provenance.get("quality_floor_passed"),
             },
             license_class=item.license_class,
             commercial_allowed=item.commercial_allowed,

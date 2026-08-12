@@ -15,8 +15,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=Path("training/data/human_preferences/v0_4"))
     parser.add_argument(
-        "--queue", type=Path,
-        default=Path("training/artifacts/preference/v0_4_initial_pool/review_queue/review_queue.jsonl"),
+        "--queue",
+        default="training/artifacts/preference/v0_4_initial_pool/review_queue/review_queue.jsonl",
+        help="Queue path or the alias 'v04_phase1_1_pilot'.",
     )
     parser.add_argument(
         "--artifact-root", type=Path, action="append",
@@ -30,7 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    store = ReviewStore(data_root=args.data_root, queue_path=args.queue, approved_roots=args.artifact_root)
+    queue = (
+        Path("training/artifacts/preference/v0_4_phase1_1_candidate_hardening/review_queue/review_queue.jsonl")
+        if args.queue == "v04_phase1_1_pilot"
+        else Path(args.queue)
+    )
+    store = ReviewStore(data_root=args.data_root, queue_path=queue, approved_roots=args.artifact_root)
     app = create_review_app(store)
     print(f"Open:\nhttp://127.0.0.1:{args.port}/review")
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")

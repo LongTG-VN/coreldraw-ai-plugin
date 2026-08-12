@@ -61,7 +61,11 @@ def _store(tmp_path: Path) -> ReviewStore:
     items = tournament_pairs(
         brief_id="spa_01", prompt="Thiết kế poster spa premium", category="spa",
         candidates=candidates, benchmark_sample_data=True, customer_provided=False,
-        provenance={"source": "unit_test"},
+        provenance={
+            "source": "unit_test",
+            "generation_version": "candidate_generation_v2_pilot",
+            "quality_floor_passed": True,
+        },
     )
     queue = write_queue(items, artifacts / "queue.jsonl")
     return ReviewStore(
@@ -109,6 +113,8 @@ def test_human_only_schema_rejects_automatic_or_unverified_records(tmp_path: Pat
         session=session, pair_id=item.pair_id,
         submission=ReviewSubmissionV1(choice="a"),
     )
+    assert review.provenance["generation_version"] == "candidate_generation_v2_pilot"
+    assert review.provenance["quality_floor_passed"] is True
     payload = review.model_dump()
     payload["source"] = "heuristic"
     with pytest.raises(ValidationError):
@@ -133,7 +139,7 @@ def test_api_submit_skip_progress_back_and_resume(tmp_path: Path) -> None:
     assert client.get(first["preview_a"]).status_code == 200
     saved = client.post("/api/v1/review/submit", json={
         "session_id": session_id, "pair_id": first["pair_id"],
-        "review": {"choice": "tie", "scores": {"overall": 7}, "notes": "Cân bằng", "confidence": 4},
+        "review": {"choice": "tie", "scores": {"overall_quality": 7}, "notes": "Cân bằng", "confidence": 4},
     })
     assert saved.status_code == 200
     second = client.get("/api/v1/review/next", params={"session_id": session_id}).json()["item"]
