@@ -84,4 +84,4 @@ def test_final_provenance_audit_cannot_use_nonce_echo_as_proof():
     assert '"historical_nonce_probe_policy": "NOT_SUFFICIENT_EVIDENCE"' in source
     assert '"historical_candidate_outputs_accepted_as_fresh_proof": False' in source
     assert 'uuid.uuid4' not in source
-    assert 'REAL_PLANNER_PROVENANCE_VERIFIED' not in source
+    assert 'perform_real_planner_audit(execute=execute)' in source
