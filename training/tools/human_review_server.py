@@ -27,6 +27,10 @@ def resolve_queue_path(queue: str) -> Path:
             "training/artifacts/benchmarks/20260812_antigravity_vs_qwen_planner/"
             "blind_review/review_queue.jsonl"
         ),
+        "real_planner_pilot_antigravity_vs_qwen": Path(
+            "training/artifacts/benchmarks/20260812_real_antigravity_vs_qwen_planner/"
+            "comparisons/review_queue.jsonl"
+        ),
     }
     return aliases.get(queue, Path(queue))
 
