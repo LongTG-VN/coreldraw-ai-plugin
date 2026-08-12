@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 from training.schemas.design import ColorSpec, DesignDocument
 from training.typography.fitting import load_font, measure_text
@@ -45,6 +45,8 @@ def render_preview(
     pixel_height = max(1, int(round(height * scale)))
     image = Image.new("RGB", (pixel_width, pixel_height), "white")
     draw = ImageDraw.Draw(image)
+
+    assets = {asset.id: asset for asset in document.assets}
 
     for element in sorted(document.elements, key=lambda item: item.z_index):
         if element.type == "group":
@@ -133,6 +135,33 @@ def render_preview(
                 spacing=max(0, int(measured.line_height - font_size)),
                 align=element.text.alignment or "left",
             )
+        elif element.type in {"image", "svg"} and element.asset_ref in assets:
+            asset = assets[element.asset_ref]
+            source_path = Path(
+                str(asset.metadata.get("preview_path") or asset.source)
+            ).expanduser()
+            if source_path.is_file():
+                with Image.open(source_path) as source:
+                    asset_image = ImageOps.exif_transpose(source).convert("RGBA")
+                    fit = element.metadata.get("asset_fit", {})
+                    crop = fit.get("crop_norm", {}) if isinstance(fit, dict) else {}
+                    crop_box = (
+                        int(round(float(crop.get("x", 0)) * asset_image.width)),
+                        int(round(float(crop.get("y", 0)) * asset_image.height)),
+                        int(round(float(crop.get("x", 0) + crop.get("width", 1)) * asset_image.width)),
+                        int(round(float(crop.get("y", 0) + crop.get("height", 1)) * asset_image.height)),
+                    )
+                    asset_image = asset_image.crop(crop_box)
+                    target_size = (max(1, right - left), max(1, bottom - top))
+                    if fit.get("runtime_mode") == "cover":
+                        rendered = ImageOps.fit(asset_image, target_size, method=Image.Resampling.LANCZOS)
+                    else:
+                        rendered = ImageOps.contain(asset_image, target_size, method=Image.Resampling.LANCZOS)
+                    paste_x = left + (target_size[0] - rendered.width) // 2
+                    paste_y = top + (target_size[1] - rendered.height) // 2
+                    image.paste(rendered, (paste_x, paste_y), rendered)
+            else:
+                draw.rectangle((left, top, right, bottom), fill=fill, outline=stroke, width=stroke_width)
         elif element.type in {"image", "svg", "other"}:
             placeholder_stroke = stroke or (80, 80, 80)
             draw.rectangle((left, top, right, bottom), fill=fill, outline=placeholder_stroke, width=2)

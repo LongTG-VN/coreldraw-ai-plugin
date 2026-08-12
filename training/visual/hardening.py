@@ -448,7 +448,13 @@ def apply_aesthetic_hardening(
     profile = get_visual_profile(brief.category, format_name=brief.format)
     category = profile.category
     palette = _palette(output, brief)
-    original_content = [item.text.content for item in output.elements if item.text]
+    original_content = {
+        item.id: item.text.content
+        for item in output.elements
+        if item.text
+        and not item.metadata.get("placeholder_label")
+        and not item.metadata.get("placeholder_for")
+    }
     counts = {
         "placeholder_count": _harden_placeholders(output, palette=palette, category=category),
         "typography_count": _harden_typography(output, category=category),
@@ -457,7 +463,13 @@ def apply_aesthetic_hardening(
         "campaign_decoration_count": _harden_campaign(output, category=category, palette=palette),
         "category_decoration_count": _harden_category_surfaces(output, category=category, palette=palette),
     }
-    final_content = [item.text.content for item in output.elements if item.text and not item.metadata.get("placeholder_label")]
+    final_content = {
+        item.id: item.text.content
+        for item in output.elements
+        if item.text
+        and not item.metadata.get("placeholder_label")
+        and not item.metadata.get("placeholder_for")
+    }
     if original_content != final_content:
         raise RuntimeError("aesthetic hardening must not mutate customer or placeholder copy")
     output.metadata = {

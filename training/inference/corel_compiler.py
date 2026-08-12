@@ -130,6 +130,36 @@ def compile_corel_operations(
         elif element.type in {"image", "svg"}:
             if element.asset_ref is None:
                 raise CorelCompileError(f"element '{element.id}' has no asset")
+            fit = element.metadata.get("asset_fit")
+            if isinstance(fit, dict):
+                frame_name = f"{element.id}__frame"
+                operations.append(
+                    {
+                        "op": "create_rectangle",
+                        "name": frame_name,
+                        **geometry,
+                        "color": _color_to_cmyk(element.visual.fill),
+                    }
+                )
+                operation = {
+                    "op": "import_asset",
+                    "name": element.id,
+                    "file_path": _asset_path(document, element.asset_ref),
+                    "x": geometry["x"],
+                    "y": geometry["y"],
+                }
+                operations.append(operation)
+                operations.append(
+                    {
+                        "op": "fit_to_frame",
+                        "shape_name": element.id,
+                        "frame_shape_name": frame_name,
+                        "mode": str(fit.get("runtime_mode", "contain")),
+                        "powerclip": str(fit.get("runtime_mode")) == "cover",
+                        "lock_contents": True,
+                    }
+                )
+                continue
             operation = {
                 "op": "import_asset",
                 "name": element.id,

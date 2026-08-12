@@ -7,7 +7,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel
 
@@ -194,6 +194,9 @@ class ReferenceGroundedDesignPipeline:
         context_token_budget: int = 350,
         visual_composition: bool = False,
         benchmark_mode: bool = False,
+        document_postprocessor: Callable[
+            [Any, StructuredBriefV1], tuple[Any, dict[str, object]]
+        ] | None = None,
     ) -> None:
         if not 1 <= top_k <= 8:
             raise ValueError("reference top_k must be between 1 and 8")
@@ -209,6 +212,7 @@ class ReferenceGroundedDesignPipeline:
         self.context_token_budget = context_token_budget
         self.visual_composition = visual_composition
         self.benchmark_mode = benchmark_mode
+        self.document_postprocessor = document_postprocessor
 
     def run(
         self,
@@ -278,6 +282,18 @@ class ReferenceGroundedDesignPipeline:
                 report["visual_metrics"] = evaluate_visual_quality(
                     fitted,
                     profile=get_visual_profile(brief.category, format_name=brief.format),
+                )
+            if self.document_postprocessor is not None:
+                fitted, extension_report = self.document_postprocessor(fitted, brief)
+                fitted, final_typography = fit_design_typography(
+                    fitted,
+                    allow_expand=False,
+                )
+                report["extension"] = extension_report
+                report["final_typography"] = final_typography
+                report["truncated_count"] = final_typography.get("truncated_count", 0)
+                report["unresolved_overflow_count"] = final_typography.get(
+                    "unresolved_overflow_count", 0
                 )
             return fitted, report
         selection = BestOfNSelector(

@@ -2,6 +2,10 @@
 
 from training.visual.composition import apply_visual_composition
 from training.visual.hardening import apply_aesthetic_hardening, evaluate_aesthetic_hardening
+from training.visual.asset_aware import (
+    apply_asset_aware_composition,
+    evaluate_asset_aware_composition,
+)
 from training.visual.metrics import evaluate_visual_quality
 from training.visual.models import VisualCompositionReportV1, VisualStyleProfileV1
 from training.visual.profiles import get_visual_profile
@@ -11,7 +15,9 @@ __all__ = [
     "VisualStyleProfileV1",
     "apply_visual_composition",
     "apply_aesthetic_hardening",
+    "apply_asset_aware_composition",
     "evaluate_aesthetic_hardening",
+    "evaluate_asset_aware_composition",
     "evaluate_visual_quality",
     "get_visual_profile",
 ]

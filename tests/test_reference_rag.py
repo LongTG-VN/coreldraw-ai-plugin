@@ -324,6 +324,42 @@ def test_rag_pipeline_visual_mode_is_explicit_and_business_safe(tmp_path: Path) 
     )
 
 
+def test_rag_pipeline_optional_postprocessor_runs_after_visual_composition(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "rag-extension-run"
+
+    def extension(document, brief):  # type: ignore[no-untyped-def]
+        output = document.model_copy(deep=True)
+        output.metadata["extension_case"] = brief.category
+        return output, {"engine": "fixture_extension"}
+
+    result = ReferenceGroundedDesignPipeline(
+        base_generator=FakePlanner(),
+        provider=MemoryProvider([_record("menu", "centered")]),
+        scorer=_scorer(),
+        model_provenance={"trained_model": True},
+        top_k=1,
+        visual_composition=True,
+        benchmark_mode=True,
+        document_postprocessor=extension,
+    ).run(
+        prompt="Food menu 6 items with prices",
+        width_mm=210,
+        height_mm=297,
+        settings=CandidateGenerationSettings(num_candidates=1, base_seed=191),
+        run_dir=run_dir,
+    )
+
+    winner = result.selection.ranking.winner
+    assert winner == "candidate_01"
+    candidate = run_dir / "candidates" / winner
+    postprocess = json.loads((candidate / "postprocess.json").read_text(encoding="utf-8"))
+    design = json.loads((candidate / "design.json").read_text(encoding="utf-8"))
+    assert postprocess["extension"]["engine"] == "fixture_extension"
+    assert design["metadata"]["extension_case"] == "menu"
+
+
 def test_reference_layout_recovers_brief_copy_and_drops_empty_placeholders() -> None:
     raw = json.dumps(
         {
