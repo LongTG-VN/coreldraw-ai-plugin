@@ -12,9 +12,10 @@ from training.gold.real_pipeline import (
 from training.schemas.gold import GoldDesignGrammarV1
 
 
-CDR_RESEARCH_RUNNERS = (
+RESEARCH_RUNNERS = (
     Path("training/evaluation/gold_grammar_pilot.py"),
     Path("training/evaluation/real_gold_pilot.py"),
+    Path("training/evaluation/planner_shootout.py"),
     Path("training/evaluation/real_planner_audit.py"),
 )
 
@@ -43,18 +44,28 @@ def test_research_runners_never_write_known_fake_cdr_magic_headers():
         "GOLD_GRAMMAR_CDR_HEADER_",
         "REAL_GOLD_CDR_HEADER_",
         "REAL_PLANNER_PILOT_CDR_",
+        "MOCK_CDR_BINARY_HEADER_",
     )
-    for runner in CDR_RESEARCH_RUNNERS:
+    for runner in RESEARCH_RUNNERS:
         source = runner.read_text(encoding="utf-8")
         for marker in forbidden_markers:
             assert marker not in source, f"fake CDR marker reintroduced in {runner}: {marker}"
 
 
-def test_gold_research_runners_require_real_corel_for_cdr_claims():
-    for runner in CDR_RESEARCH_RUNNERS[:2]:
+def test_offline_artifact_runners_never_claim_real_cdr():
+    for runner in RESEARCH_RUNNERS[:3]:
         source = runner.read_text(encoding="utf-8")
         assert "NOT_GENERATED_REQUIRES_REAL_COREL_API" in source
         assert "real_cdr_verified" in source
+        assert 'with open(cdr_path, "wb")' not in source
+
+
+def test_deterministic_planner_shootout_is_not_reviewable():
+    source = Path("training/evaluation/planner_shootout.py").read_text(encoding="utf-8")
+    assert '"DETERMINISTIC_ADAPTER_FRAMEWORK_SMOKE"' in source
+    assert '"valid_for_ai_planner_comparison": False' in source
+    assert '"human_review_ready": False' in source
+    assert 'review_queue.jsonl' not in source
 
 
 def test_real_planner_shootout_is_fail_closed():
