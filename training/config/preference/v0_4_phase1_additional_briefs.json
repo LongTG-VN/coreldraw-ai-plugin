@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "benchmark_sample_data": true,
+  "customer_provided": false,
+  "briefs": [
+    {
+      "id": "spa_botanical_square",
+      "category": "spa",
+      "prompt": "Social post vuông cho spa hư cấu SEN SPA, phong cách botanical xanh sage và kem, headline THƯ GIÃN MỖI NGÀY, CTA ĐẶT LỊCH",
+      "width_mm": 108,
+      "height_mm": 108,
+      "seed": 6100
+    },
+    {
+      "id": "nail_modern_landscape",
+      "category": "nail",
+      "prompt": "Banner ngang cho thương hiệu hư cấu MIA NAIL, phong cách hiện đại màu tím lavender, headline NEW NAIL MOOD, CTA BOOK NOW",
+      "width_mm": 160,
+      "height_mm": 90,
+      "seed": 6200
+    },
+    {
+      "id": "cafe_social_warm",
+      "category": "cafe",
+      "prompt": "Social poster cho quán hư cấu HẠT CAFE, tông nâu ấm tối giản, headline CHẬM MỘT NHỊP, nội dung CÀ PHÊ MỖI NGÀY, CTA GHÉ QUÁN",
+      "width_mm": 108,
+      "height_mm": 135,
+      "seed": 6300
+    },
+    {
+      "id": "business_card_studio",
+      "category": "business_card",
+      "prompt": "Card visit ngang cho studio hư cấu MÂY STUDIO, phong cách tối giản xanh navy và kem, gồm tên studio, DESIGN STUDIO và email placeholder rõ ràng",
+      "width_mm": 90,
+      "height_mm": 54,
+      "seed": 6400
+    },
+    {
+      "id": "cosmetics_wide_launch",
+      "category": "cosmetics",
+      "prompt": "Banner ngang ra mắt serum hư cấu LUMI, phong cách clean trắng và xanh mint, headline PURE RADIANCE, ba lợi ích benchmark ngắn, CTA TÌM HIỂU",
+      "width_mm": 180,
+      "height_mm": 90,
+      "seed": 6500
+    },
+    {
+      "id": "opening_minimal_blue",
+      "category": "grand_opening",
+      "prompt": "Poster khai trương cho cửa hàng hư cấu NOVA HOME, phong cách hình học xanh cobalt và trắng, headline GRAND OPENING, CTA GHÉ THĂM; không tự tạo ngày hay khuyến mãi",
+      "width_mm": 120,
+      "height_mm": 160,
+      "seed": 6600
+    },
+    {
+      "id": "clinic_signage_wide",
+      "category": "signage",
+      "prompt": "Bảng hiệu ngang cho phòng khám hư cấu AN TÂM, nền xanh navy chữ trắng, headline PHÒNG KHÁM AN TÂM, phụ đề CHĂM SÓC TẬN TÂM; không tạo số điện thoại hoặc địa chỉ",
+      "width_mm": 500,
+      "height_mm": 100,
+      "seed": 6700
+    }
+  ]
+}
