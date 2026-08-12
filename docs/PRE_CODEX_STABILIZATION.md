@@ -111,30 +111,23 @@ This prevents another random/rejected source contact sheet from being treated as
 
 ### 6. Fake `.cdr` generation has been removed
 
-Both:
+The following historical research runners previously manufactured bytes and saved them with a `.cdr` extension:
 
 - `training/evaluation/gold_grammar_pilot.py`
 - `training/evaluation/real_gold_pilot.py`
+- `training/evaluation/planner_shootout.py`
+- historical real-planner pilot code
 
-previously wrote synthetic bytes to a file named `output.cdr`.
+The stabilized offline artifact runners no longer do that.
 
-That mechanism has been removed.
-
-Offline research runners now emit:
-
-```text
-corel_operations.json
-cdr_request.json
-```
-
-with:
+Where a future CDR would be needed, they emit a request marker such as:
 
 ```text
 status: NOT_GENERATED_REQUIRES_REAL_COREL_API
 real_cdr_verified: false
 ```
 
-A real `.cdr` claim now requires execution through the previously verified Windows/Corel Design API path.
+A real `.cdr` claim requires execution through the previously verified Windows/Corel Design API path.
 
 ### 7. Manual Phase 1.3 grammars are quarantined as fixtures
 
@@ -186,9 +179,9 @@ The stabilized adapter:
 
 ### 10. Tests are hermetic
 
-`tests/test_real_gold_grammar.py` now builds a small temporary dataset and approved manifest fixture.
+`tests/test_real_gold_grammar.py` now builds a small temporary dataset and approved-manifest fixture.
 
-GitHub CI no longer depends on ignored local GenPoster files and now verifies:
+GitHub CI no longer depends on ignored local GenPoster files and verifies:
 
 - source discovery does not auto-approve,
 - missing/unapproved manifests fail closed,
@@ -197,7 +190,88 @@ GitHub CI no longer depends on ignored local GenPoster files and now verifies:
 - no fake `.cdr` is written,
 - pilot blocks before generation without source approval.
 
-`tests/test_research_integrity_guards.py` prevents the known fake-CDR magic headers and permissive GenPoster rights from being reintroduced.
+`tests/test_research_integrity_guards.py` prevents known fake-CDR magic headers and permissive GenPoster rights from being reintroduced.
+
+### 11. The first planner shootout is explicitly a fixture smoke
+
+`training/evaluation/planner_shootout.py`
+
+The original 40-candidate benchmark used deterministic Qwen/Antigravity adapters. It is now explicitly classified as:
+
+```text
+DETERMINISTIC_ADAPTER_FRAMEWORK_SMOKE
+NOT_VALID_FOR_AI_PLANNER_COMPARISON
+```
+
+It can still exercise:
+
+- the shared planner contract,
+- content locks,
+- preview generation,
+- Corel-operation compilation,
+- artifact layout.
+
+It no longer:
+
+- creates a blind human-review queue,
+- claims an AI-vs-AI comparison,
+- writes fake `.cdr` files,
+- marks fixture outputs as commercially usable.
+
+### 12. The "real planner" pilot is frozen behind a provenance gate
+
+`training/evaluation/real_planner_audit.py`
+
+A historical bug remained after the first audit:
+
+- `RealQwenDesignPlanner` could invoke a model but still return a structured design originating from a fixture path;
+- `RealAntigravityDesignPlanner` could construct a reasoning-looking JSON string locally and mark `real_agent_planning = true` without proving an external Antigravity execution.
+
+The v2 audit therefore requires more than non-empty raw output or a model/agent-looking class name.
+
+For Qwen, a valid run must prove:
+
+```text
+real_model_invoked = true
+design_plan_derived_from_ai_output = true
+no fixture / historical fallback
+fresh raw output exists
+content lock valid
+```
+
+For Antigravity, a valid run must additionally prove:
+
+```text
+real_agent_planning = true
+external_execution_verified = true
+design_plan_derived_from_ai_output = true
+synthetic_reasoning_trace = false
+```
+
+The current wrappers do not satisfy those requirements. Therefore the benchmark defaults to:
+
+```text
+PLANNER_SHOOTOUT_FROZEN
+benchmark_valid: false
+human_review_ready: false
+```
+
+and does not generate candidates or review queues.
+
+### 13. Nonce echo is no longer accepted as Antigravity provenance
+
+`training/evaluation/final_provenance_audit.py`
+
+The historical final audit treated a fresh nonce appearing in a response as evidence of a fresh Antigravity execution. That is insufficient because a deterministic local adapter can echo the same nonce.
+
+The final audit now delegates to the v2 provenance gate and records:
+
+```text
+historical_nonce_probe_policy: NOT_SUFFICIENT_EVIDENCE
+historical_candidate_outputs_accepted_as_fresh_proof: false
+```
+
+It defaults to `execute = false`. Codex must explicitly opt into a live audit once a genuine execution bridge exists.
 
 ## Historical Artifacts
 
@@ -207,6 +281,8 @@ But do not interpret old files containing labels such as:
 
 ```text
 REAL_GOLD_PIPELINE_VERIFIED
+REAL_PLANNER_SHOOTOUT_VALID
+REAL_PLANNER_PROVENANCE_VERIFIED
 commercial_allowed: true
 output.cdr
 ```
@@ -223,6 +299,11 @@ qwen_fallback_preserved: true
 
 v0_3_4_visual_rag_enabled: false
 v0_3_5_vision_critic_enabled: false
+
+deterministic_planner_shootout_valid_as_ai_comparison: false
+real_planner_shootout_frozen: true
+antigravity_external_execution_verified: false
+qwen_design_plan_ai_derivation_verified_in_shootout_wrapper: false
 
 manual_gold_is_real_gold: false
 manual_gold_human_review_ready: false
@@ -245,11 +326,12 @@ When Codex has budget again:
 1. check out this stabilization branch and verify the latest CI matrix is green;
 2. audit the diff in Draft PR #5 before merging anything back to the research branch;
 3. preserve the verified Corel/API and v0.3.3 path;
-4. decide whether to keep or further simplify the quarantined Phase 1.3/1.3b research runners;
-5. build a tiny source-curation workflow for **company-owned** CDR files;
-6. use only 5–10 explicitly human-approved company designs for the next Gold extractor test;
-7. require real Corel API save/reopen for every future `.cdr` claim;
-8. only after candidate quality improves should preference training resume.
+4. decide whether to delete, keep, or rebuild the quarantined planner wrappers — do **not** unfreeze the shootout until `DesignPlanV2` is demonstrably derived from real AI outputs;
+5. keep Phase 1.3 manual grammar code only as regression tooling;
+6. build a tiny source-curation workflow for **company-owned** CDR files;
+7. use only 5–10 explicitly human-approved company designs for the next Gold extractor test;
+8. require real Corel API save/reopen for every future `.cdr` claim;
+9. only after candidate quality improves should preference training resume.
 
 ## Best Next Research Input
 
