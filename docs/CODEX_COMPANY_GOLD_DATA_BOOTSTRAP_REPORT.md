@@ -21,9 +21,10 @@ starting_branch: stabilize/pre-codex-return-20260812
 starting_sha: abe283b5281551d487cd3b85b1bf85ba26de17ac
 implementation_branch: codex/company-gold-data-bootstrap
 implementation_sha: 58cc50356d67c0fafa60548d5de65d5b81824578
-final_sha: recorded after the documentation commit in the final handoff message
-remote_sha: PENDING_PUSH
-worktree: documentation changes only at report capture; final clean gate pending commit
+documentation_checkpoint_sha: e65e162f206874e0c18cbe41ae26eb0169ac7879
+final_sha: recorded after this CI annotation commit in the final handoff message
+remote_sha_at_ci_run: e65e162f206874e0c18cbe41ae26eb0169ac7879
+worktree: clean at pushed documentation checkpoint
 ```
 
 The stabilization branch was not rewritten. Ignored artifacts, checkpoints,
@@ -243,9 +244,10 @@ font units, compiler compatibility, Gold provenance, and fake CDR prevention.
 ## CI
 
 ```text
-Python 3.10: PENDING_PUSH
-Python 3.11: PENDING_PUSH
-Python 3.12: PENDING_PUSH
+Python 3.10: PASS
+Python 3.11: PASS
+Python 3.12: PASS
+workflow_run: https://github.com/LongTG-VN/coreldraw-ai-plugin/actions/runs/31674179486
 ```
 
 CI does not require Corel, CUDA, Qwen, private files, or the archive. The real
