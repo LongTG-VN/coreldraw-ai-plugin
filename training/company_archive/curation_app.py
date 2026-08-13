@@ -109,4 +109,3 @@ def create_curation_app(database: ArchiveDatabase, workspace: Path) -> FastAPI:
         return {"saved": True, "file_id": result.file_id, "gold_status": result.gold_status}
 
     return app
-

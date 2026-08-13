@@ -36,4 +36,3 @@ def extract_company_gold_grammar(
         }
     )
     return grammar
-

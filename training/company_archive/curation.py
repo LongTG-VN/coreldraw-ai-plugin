@@ -87,4 +87,3 @@ def curate_file(
     return ArchiveFileRecord.model_validate(
         {key: database.get_file(file_id)[key] for key in ArchiveFileRecord.model_fields}
     )
-

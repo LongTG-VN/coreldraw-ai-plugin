@@ -22,4 +22,3 @@ def classify_extension(extension: str) -> tuple[FileType, bool, bool, bool]:
     if suffix in IMAGE_SUFFIXES:
         return FileType.IMAGE, False, False, True
     return FileType.OTHER, False, False, False
-

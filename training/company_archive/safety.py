@@ -43,4 +43,3 @@ def assert_source_unchanged(path: Path, before: tuple[int, int, int]) -> None:
         raise ArchiveSafetyError(
             f"immutable source changed during read-only operation: {path}"
         )
-

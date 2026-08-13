@@ -70,4 +70,3 @@ def bind_full_sha256(database: ArchiveDatabase, file_id: str) -> str:
     assert_source_unchanged(path, before)
     database.update_fields(file_id, sha256=digest, sha256_status=WorkStatus.COMPLETE)
     return digest
-

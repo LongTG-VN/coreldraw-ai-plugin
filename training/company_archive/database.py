@@ -195,4 +195,3 @@ class ArchiveDatabase:
         result = dict(totals)
         result["largest_files"] = [dict(row) for row in largest]
         return result
-
