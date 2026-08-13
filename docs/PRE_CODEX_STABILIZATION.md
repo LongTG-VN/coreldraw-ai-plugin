@@ -359,3 +359,39 @@ Until Codex resumes:
 - no research-success claims from Antigravity alone.
 
 This branch should remain boring, reproducible, conservative, and easy for Codex to audit.
+
+## Codex Resume Audit — 2026-08-13
+
+Codex resumed from exact stabilization SHA
+`abe283b5281551d487cd3b85b1bf85ba26de17ac`, audited Draft PR #5 and the
+stabilization diff, and reran the hermetic suite before company-data work. The
+baseline was clean and all 272 existing tests passed.
+
+One real-runtime defect was found during the resumed Corel audit: the bridge set
+`Document.Unit = 4` while describing that value as millimetres. In the CorelDRAW
+2020 automation enum, millimetres are value `3`; value `4` is centimetres. The
+bridge and regression test now use `3`.
+
+A real CorelDRAW 2020 smoke then passed snapshot, editable object creation,
+mutation, transaction commit, intentional rollback, real Corel `SaveAs`,
+close/open, post-reopen text/vector mutation, current save, PNG export, and PDF
+export. No synthetic bytes were written to a `.cdr` file.
+
+The new `training.company_archive` package is a conservative bootstrap only. It
+provides read-only/resumable inventory, staged hashes, verified duplicate
+grouping, bounded previews, human-only Gold curation, safe Corel inspection, and
+a page-one CDR-to-`DesignDocument` prototype. It has not scanned the private 800
+GB archive. Its live smoke used only a project-created Corel CDR, not a company
+sample. See `docs/COMPANY_CDR_ARCHIVE_PIPELINE.md`.
+
+Current resume status:
+
+```text
+stabilization_audit_passed: true
+real_corel_runtime_verified: true
+company_archive_full_scan_started: false
+company_cdr_sample_supplied: false
+company_gold_promoted: false
+preference_training_started: false
+status: WAITING_FOR_COMPANY_CDR_SAMPLE
+```
