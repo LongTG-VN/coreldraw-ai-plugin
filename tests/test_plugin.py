@@ -214,6 +214,12 @@ def test_create_rectangle_uses_expected_bounds_and_color(bridges):
     assert app.layer.Shapes.Item(name).Fill.color == (1, 2, 3, 4)
 
 
+def test_corel_session_enforces_document_millimetres(bridges):
+    _app, bridge, _extended = bridges
+    with bridge.session() as (_application, document):
+        assert document.Unit == 3
+
+
 def test_text_applies_font_size_and_fill(bridges):
     app, bridge, _ = bridges
     name = bridge.create_artistic_text_cmyk(

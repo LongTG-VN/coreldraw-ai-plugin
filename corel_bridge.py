@@ -69,7 +69,7 @@ class CorelDrawBridge:
                     doc = app.CreateDocument()
 
                 try:
-                    doc.Unit = 4  # Enforce cdrMillimeter (4)
+                    doc.Unit = 3  # Corel cdrMillimeter enum value (3).
                 except Exception:
                     pass
 
