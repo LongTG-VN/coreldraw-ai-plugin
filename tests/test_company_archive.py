@@ -22,7 +22,7 @@ from training.company_archive.duplicates import (
 from training.company_archive.extractor import inspection_to_design_document
 from training.company_archive.hashing import fast_fingerprint, sha256_file
 from training.company_archive.gold import extract_company_gold_grammar
-from training.company_archive.inspector import CompanyCdrInspector
+from training.company_archive.inspector import CompanyCdrInspector, bounded_export_size
 from training.company_archive.models import (
     ArchiveCategory,
     ArchiveFileRecord,
@@ -211,6 +211,15 @@ class _FakeInspector:
         assert archive_root in path.resolve().parents
         Image.new("RGB", (120, 80), "white").save(output)
         return output
+
+
+def test_bounded_export_size_preserves_ratio_and_pixel_budget() -> None:
+    assert bounded_export_size(210, 297) == (1697, 2400)
+    width, height = bounded_export_size(100_000, 100, max_dimension=2400)
+    assert (width, height) == (2400, 2)
+    assert width * height <= 8_000_000
+    with pytest.raises(ValueError, match="finite and positive"):
+        bounded_export_size(float("nan"), 100)
 
 
 def test_preview_batch_is_bounded_and_records_dimensions(tmp_path: Path) -> None:

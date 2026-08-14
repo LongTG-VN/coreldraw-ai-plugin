@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,29 @@ COREL_UNITS = {
     15: "q",
     16: "h",
 }
+
+
+def bounded_export_size(
+    page_width: float,
+    page_height: float,
+    *,
+    max_dimension: int = 2400,
+    max_pixels: int = 8_000_000,
+) -> tuple[int, int]:
+    """Return an aspect-preserving raster size bounded for unattended exports."""
+
+    width = float(page_width)
+    height = float(page_height)
+    if not math.isfinite(width) or not math.isfinite(height) or width <= 0 or height <= 0:
+        raise ValueError("Corel page dimensions must be finite and positive")
+    if max_dimension < 1 or max_pixels < 1:
+        raise ValueError("preview bounds must be positive")
+    scale = min(
+        max_dimension / width,
+        max_dimension / height,
+        math.sqrt(max_pixels / (width * height)),
+    )
+    return max(1, int(round(width * scale))), max(1, int(round(height * scale)))
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -165,6 +189,8 @@ class CompanyCdrInspector:
         *,
         archive_root: Path,
         dpi: int = 96,
+        max_dimension: int = 2400,
+        max_pixels: int = 8_000_000,
     ) -> Path:
         source = resolve_source_file(path, archive_root, suffixes={".cdr", ".cdt"})
         target = output.expanduser().resolve(strict=False)
@@ -181,12 +207,22 @@ class CompanyCdrInspector:
                     raise CorelDrawBridgeError("source CDR is already active")
                 opened = self._open_document(application, source)
                 try:
+                    page = opened.ActivePage
+                    export_width, export_height = bounded_export_size(
+                        _float(page.SizeWidth),
+                        _float(page.SizeHeight),
+                        max_dimension=max_dimension,
+                        max_pixels=max_pixels,
+                    )
                     options = application.CreateStructExportOptions()
                     palette = application.CreateStructPaletteOptions()
                     options.ImageType = CDR_RGB_COLOR_IMAGE
                     options.Overwrite = False
                     options.ResolutionX = dpi
                     options.ResolutionY = dpi
+                    options.MaintainAspect = True
+                    options.SizeX = export_width
+                    options.SizeY = export_height
                     export_filter = opened.ExportEx(
                         str(target), CDR_PNG, CDR_CURRENT_PAGE, options, palette
                     )
