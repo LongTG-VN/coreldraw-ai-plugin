@@ -22,7 +22,11 @@ from training.company_archive.duplicates import (
 from training.company_archive.extractor import inspection_to_design_document
 from training.company_archive.hashing import fast_fingerprint, sha256_file
 from training.company_archive.gold import extract_company_gold_grammar
-from training.company_archive.inspector import CompanyCdrInspector, bounded_export_size
+from training.company_archive.inspector import (
+    CompanyCdrInspector,
+    _bounded_bbox,
+    bounded_export_size,
+)
 from training.company_archive.models import (
     ArchiveCategory,
     ArchiveFileRecord,
@@ -339,10 +343,29 @@ def test_cdr_inspector_closes_without_saving_source(tmp_path: Path) -> None:
     assert result.vector_count == 2
     assert len({item.object_id for item in result.objects}) == 3
     assert result.unit == "mm"
+    assert bridge.opened.Unit == 3
     assert result.source_save_called is False
     assert bridge.opened.closed is True
     assert bridge.opened.save_called is False
     assert before == (source.stat().st_size, source.stat().st_mtime_ns)
+
+
+def test_cdr_inspector_clamps_off_page_bbox_with_explicit_evidence() -> None:
+    bbox, raw, clipped = _bounded_bbox(
+        left=-5,
+        bottom=-10,
+        shape_width=40,
+        shape_height=20,
+        page_width=100,
+        page_height=50,
+    )
+
+    assert raw == {"left": -5, "bottom": -10, "width": 40, "height": 20}
+    assert clipped is True
+    assert 0 <= bbox["x"] < 100
+    assert 0 <= bbox["y"] < 50
+    assert bbox["x"] + bbox["width"] <= 100
+    assert bbox["y"] + bbox["height"] <= 50
 
 
 def test_cdr_inspection_maps_to_normalized_design_and_corel_operations(tmp_path: Path) -> None:
@@ -359,8 +382,9 @@ def test_cdr_inspection_maps_to_normalized_design_and_corel_operations(tmp_path:
         commercial_allowed=False,
     )
 
-    assert document.metadata["source_type"] == "COMPANY_OWNED_CDR"
+    assert document.metadata["source_type"] == "COMPANY_ARCHIVE_CDR"
     assert document.metadata["project_owned"] is False
+    assert document.source.license_class == "COMPANY_ARCHIVE_RIGHTS_UNVERIFIED"
     assert document.source.commercial_allowed is False
     assert document.elements[0].bbox_norm.x == pytest.approx(10 / 210)
     assert document.elements[0].text.font_family == "Arial"
@@ -425,6 +449,23 @@ def test_extraction_rights_and_unknown_units_fail_closed(tmp_path: Path) -> None
         )
     invalid = inspection.model_copy(update={"unit": "unknown"})
     with pytest.raises(ValueError, match="unsupported Corel document unit"):
+        inspection_to_design_document(
+            invalid,
+            source_sha256=sha256_file(source),
+            category="SALE",
+        )
+
+
+def test_extraction_rejects_geometry_clipped_from_pasteboard(tmp_path: Path) -> None:
+    source = tmp_path / "real.cdr"
+    source.write_bytes(b"fixture")
+    inspection = _inspection(source)
+    clipped = inspection.objects[0].model_copy(
+        update={"metadata": {"bbox_clipped_to_page": True}}
+    )
+    invalid = inspection.model_copy(update={"objects": [clipped, *inspection.objects[1:]]})
+
+    with pytest.raises(ValueError, match="outside the active page"):
         inspection_to_design_document(
             invalid,
             source_sha256=sha256_file(source),

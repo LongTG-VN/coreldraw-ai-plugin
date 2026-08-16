@@ -170,7 +170,7 @@ class GoldGrammarExtractor:
             return "DECORATION"
         if "body" in combined or "text" in combined:
             return "BODY"
-        return "BODY"
+        return "UNKNOWN"
 
     def _extract_relationships(self, slots: list[GoldSlotV1]) -> list[GoldRelationshipV1]:
         relationships: list[GoldRelationshipV1] = []

@@ -143,7 +143,7 @@ def inspection_to_design_document(
             license_class=(
                 "COMPANY_OWNED_CONFIRMED"
                 if rights_status == RightsStatus.CONFIRMED_COMPANY_OWNED
-                else "COMPANY_OWNED_RIGHTS_UNVERIFIED"
+                else "COMPANY_ARCHIVE_RIGHTS_UNVERIFIED"
             ),
             upstream_id=source_sha256,
             commercial_allowed=commercial_allowed,
@@ -152,7 +152,11 @@ def inspection_to_design_document(
         category=category,
         elements=elements,
         metadata={
-            "source_type": "COMPANY_OWNED_CDR",
+            "source_type": (
+                "COMPANY_OWNED_CDR"
+                if rights_status == RightsStatus.CONFIRMED_COMPANY_OWNED
+                else "COMPANY_ARCHIVE_CDR"
+            ),
             "project_owned": rights_status == RightsStatus.CONFIRMED_COMPANY_OWNED,
             "rights_status": rights_status.value,
             "source_sha256": source_sha256,
@@ -174,6 +178,11 @@ def _element_from_object(
     canvas: CanvasSpec,
     scale: float,
 ) -> DesignElement:
+    if item.metadata.get("bbox_clipped_to_page") is True:
+        raise ValueError(
+            f"Corel object lies outside the active page and cannot be normalized: "
+            f"{item.corel_name}"
+        )
     raw = item.bbox
     bbox = BoundingBox(
         x=max(0.0, raw["x"] * scale),

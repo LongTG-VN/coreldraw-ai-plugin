@@ -133,6 +133,43 @@ def _shape_kind(shape: Any, text: str | None, child_count: int) -> str:
     return "vector"
 
 
+def _bounded_bbox(
+    *,
+    left: float,
+    bottom: float,
+    shape_width: float,
+    shape_height: float,
+    page_width: float,
+    page_height: float,
+) -> tuple[dict[str, float], dict[str, float], bool]:
+    """Clamp off-page Corel geometry and retain the unclipped source evidence."""
+
+    raw = {
+        "left": left,
+        "bottom": bottom,
+        "width": shape_width,
+        "height": shape_height,
+    }
+    raw_top = page_height - bottom - shape_height
+    bounded_left = min(max(0.0, left), max(0.0, page_width - 1e-9))
+    bounded_top = min(max(0.0, raw_top), max(0.0, page_height - 1e-9))
+    bounded_width = max(1e-9, min(shape_width, page_width - bounded_left))
+    bounded_height = max(1e-9, min(shape_height, page_height - bounded_top))
+    bounded = {
+        "x": bounded_left,
+        "y": bounded_top,
+        "width": bounded_width,
+        "height": bounded_height,
+    }
+    clipped = (
+        abs(bounded_left - left) > 1e-9
+        or abs(bounded_top - raw_top) > 1e-9
+        or abs(bounded_width - shape_width) > 1e-9
+        or abs(bounded_height - shape_height) > 1e-9
+    )
+    return bounded, raw, clipped
+
+
 class CompanyCdrInspector:
     """Open one approved CDR, inspect it, and close it without ever saving it."""
 
@@ -157,6 +194,12 @@ class CompanyCdrInspector:
             raise CorelDrawBridgeError(
                 f"Corel activated a different document after open: {opened_path}"
             )
+        try:
+            opened.Unit = 3  # Corel cdrMillimeter; keep page and shape coordinates aligned.
+        except Exception as exc:
+            raise CorelDrawBridgeError(
+                f"could not set opened CDR to millimetres for inspection: {exc}"
+            ) from exc
         return opened
 
     def inspect(self, path: Path, *, archive_root: Path) -> CdrInspectionV1:
@@ -273,10 +316,14 @@ class CompanyCdrInspector:
             bottom = _float(getattr(shape, "BottomY", getattr(shape, "PositionY", 0)))
             shape_width = max(1e-9, _float(getattr(shape, "SizeWidth", 0)))
             shape_height = max(1e-9, _float(getattr(shape, "SizeHeight", 0)))
-            top = max(0.0, height - bottom - shape_height)
-            left = max(0.0, left)
-            shape_width = min(shape_width, max(1e-9, width - left))
-            shape_height = min(shape_height, max(1e-9, height - top))
+            bbox, raw_bbox, bbox_clipped = _bounded_bbox(
+                left=left,
+                bottom=bottom,
+                shape_width=shape_width,
+                shape_height=shape_height,
+                page_width=width,
+                page_height=height,
+            )
             fill = _shape_color(shape)
             if fill and fill not in color_summary:
                 color_summary.append(fill)
@@ -287,12 +334,12 @@ class CompanyCdrInspector:
                     object_id=object_id,
                     corel_name=raw_name,
                     object_type=kind,
-                    bbox={"x": left, "y": top, "width": shape_width, "height": shape_height},
+                    bbox=bbox,
                     bbox_norm={
-                        "x": left / width,
-                        "y": top / height,
-                        "width": shape_width / width,
-                        "height": shape_height / height,
+                        "x": bbox["x"] / width,
+                        "y": bbox["y"] / height,
+                        "width": bbox["width"] / width,
+                        "height": bbox["height"] / height,
                     },
                     rotation=_float(getattr(shape, "RotationAngle", 0)),
                     z_index=index,
@@ -303,7 +350,11 @@ class CompanyCdrInspector:
                     font_size=font_size,
                     alignment=alignment,
                     fill=fill,
-                    metadata={"corel_type": int(getattr(shape, "Type", 0) or 0)},
+                    metadata={
+                        "corel_type": int(getattr(shape, "Type", 0) or 0),
+                        "source_raw_bbox": raw_bbox,
+                        "bbox_clipped_to_page": bbox_clipped,
+                    },
                 )
             )
             for child in children:

@@ -10,6 +10,7 @@ from training.schemas.design import NormalizedBoundingBox
 
 
 SemanticRole = Literal[
+    "UNKNOWN",
     "BRAND",
     "LOGO",
     "HEADLINE",
