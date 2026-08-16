@@ -187,4 +187,3 @@ Before repeating this pilot:
 3. rerun the same five IDs and require a valid control before any adaptation.
 
 No training or new aesthetic experiment is justified by this result.
-

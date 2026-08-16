@@ -118,4 +118,3 @@ Before rerunning this exact cohort, the pipeline needs an explicit,
 human-auditable artboard/pasteboard-region selection contract and a causal
 strategy for arbitrary Corel curves/bitmaps. Those capabilities must preserve
 the original source cluster without manual geometry repair.
-
