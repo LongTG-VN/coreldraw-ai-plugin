@@ -190,7 +190,7 @@ winner automatically.
 
 - Targeted pasteboard/company tests: `31 passed`
 - Full pytest: `308 passed`, one dependency deprecation warning
-- Tracked Python syntax compile: `209` files passed
+- Tracked Python syntax compile: `213` files passed
 - `git diff --check`: passed
 
 `python -m compileall -q .` was not used as final evidence because it traverses
