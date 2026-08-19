@@ -7,6 +7,12 @@ from training.company_archive.models import (
     GoldStatus,
     HumanQualityStatus,
 )
+from training.company_archive.regions import (
+    DesignRegion,
+    DesignRegionAnalysis,
+    RegionBounds,
+    analyze_design_regions,
+)
 
 __all__ = [
     "ArchiveCategory",
@@ -14,4 +20,8 @@ __all__ = [
     "CdrInspectionV1",
     "GoldStatus",
     "HumanQualityStatus",
+    "DesignRegion",
+    "DesignRegionAnalysis",
+    "RegionBounds",
+    "analyze_design_regions",
 ]

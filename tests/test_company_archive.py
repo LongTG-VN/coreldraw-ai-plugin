@@ -345,6 +345,10 @@ def test_cdr_inspector_closes_without_saving_source(tmp_path: Path) -> None:
     assert result.unit == "mm"
     assert bridge.opened.Unit == 3
     assert result.source_save_called is False
+    assert result.objects[0].metadata["source_page"] == 1
+    assert result.objects[0].metadata["source_layer"] == "Layer 1"
+    assert result.objects[0].metadata["visible"] is True
+    assert result.objects[0].metadata["locked"] is False
     assert bridge.opened.closed is True
     assert bridge.opened.save_called is False
     assert before == (source.stat().st_size, source.stat().st_mtime_ns)

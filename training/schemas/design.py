@@ -25,6 +25,7 @@ ElementType = Literal[
 ]
 AssetType = Literal["bitmap", "svg", "logo", "font", "other"]
 DocumentUnit = Literal["px", "mm", "in", "pt"]
+CanvasSourceType = Literal["ACTIVE_PAGE", "ARTWORK_REGION"]
 
 
 class StrictModel(BaseModel):
@@ -134,11 +135,46 @@ class SourceSpec(StrictModel):
     commercial_allowed: bool
 
 
+class SourceCanvasBounds(StrictModel):
+    """Original Corel bottom-left bounds retained as extraction evidence."""
+
+    left: FiniteFloat
+    bottom: FiniteFloat
+    right: FiniteFloat
+    top: FiniteFloat
+
+    @model_validator(mode="after")
+    def validate_extent(self) -> "SourceCanvasBounds":
+        if self.right <= self.left or self.top <= self.bottom:
+            raise ValueError("source canvas bounds must have positive extent")
+        return self
+
+
+class SourceCanvasOrigin(StrictModel):
+    x: FiniteFloat
+    y: FiniteFloat
+
+
 class CanvasSpec(StrictModel):
     width: FiniteFloat = Field(gt=0)
     height: FiniteFloat = Field(gt=0)
     unit: DocumentUnit = "px"
     background: VisualSpec | None = None
+    source_type: CanvasSourceType = "ACTIVE_PAGE"
+    source_page_bounds: SourceCanvasBounds | None = None
+    artwork_region_bounds: SourceCanvasBounds | None = None
+    normalization_origin: SourceCanvasOrigin | None = None
+
+    @model_validator(mode="after")
+    def validate_source_context(self) -> "CanvasSpec":
+        if self.source_type == "ARTWORK_REGION":
+            if self.source_page_bounds is None:
+                raise ValueError("artwork-region canvas requires source page bounds")
+            if self.artwork_region_bounds is None:
+                raise ValueError("artwork-region canvas requires artwork region bounds")
+            if self.normalization_origin is None:
+                raise ValueError("artwork-region canvas requires normalization origin")
+        return self
 
 
 class DesignElement(StrictModel):

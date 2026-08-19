@@ -10,6 +10,7 @@ from typing import Any
 from corel_bridge import CorelDrawBridge, CorelDrawBridgeError, corel_bridge
 from extended_bridge import CDR_CURRENT_PAGE, CDR_PNG, CDR_RGB_COLOR_IMAGE
 from training.company_archive.models import CdrInspectionV1, CdrObjectV1
+from training.company_archive.regions import DesignRegion
 from training.company_archive.safety import (
     assert_source_unchanged,
     resolve_source_file,
@@ -36,6 +37,7 @@ COREL_UNITS = {
     15: "q",
     16: "h",
 }
+CDR_SELECTION = 2
 
 
 def bounded_export_size(
@@ -65,6 +67,20 @@ def _float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
+        return default
+
+
+def _bool(value: Any, default: bool | None = None) -> bool | None:
+    try:
+        return bool(value)
+    except Exception:
+        return default
+
+
+def _attribute(value: Any, name: str, default: Any = None) -> Any:
+    try:
+        return getattr(value, name)
+    except Exception:
         return default
 
 
@@ -278,6 +294,121 @@ class CompanyCdrInspector:
             raise CorelDrawBridgeError("Corel preview export produced no file")
         return target
 
+    @staticmethod
+    def _shape_map(document: Any) -> tuple[dict[str, Any], dict[str, str | None]]:
+        """Recreate the inspection's stable object-ID traversal for selection export."""
+
+        page = document.ActivePage
+        raw_shapes = list(_collection_items(getattr(page, "Shapes", page.ActiveLayer.Shapes)))
+        shape_by_id: dict[str, Any] = {}
+        parent_by_id: dict[str, str | None] = {}
+        used_object_ids: set[str] = set()
+
+        def visit(shape: Any, *, parent_id: str | None = None) -> None:
+            index = len(shape_by_id) + 1
+            raw_name = str(getattr(shape, "Name", "") or f"object_{index}")
+            base_object_id = _safe_name(raw_name, index)
+            object_id = base_object_id
+            suffix = 2
+            while object_id in used_object_ids:
+                object_id = f"{base_object_id}_{suffix}"
+                suffix += 1
+            used_object_ids.add(object_id)
+            shape_by_id[object_id] = shape
+            parent_by_id[object_id] = parent_id
+            for child in _collection_items(getattr(shape, "Shapes", [])):
+                visit(child, parent_id=object_id)
+
+        for shape in raw_shapes:
+            visit(shape)
+        return shape_by_id, parent_by_id
+
+    def render_region_preview(
+        self,
+        path: Path,
+        output: Path,
+        *,
+        archive_root: Path,
+        region: DesignRegion,
+        dpi: int = 96,
+        max_dimension: int = 2400,
+        max_pixels: int = 8_000_000,
+    ) -> Path:
+        """Export selected source-copy shapes without moving or saving them."""
+
+        if region.source_page != 1:
+            raise ValueError("current region preview supports source page 1 only")
+        source = resolve_source_file(path, archive_root, suffixes={".cdr", ".cdt"})
+        target = output.expanduser().resolve(strict=False)
+        if target.suffix.casefold() != ".png":
+            raise ValueError("region preview target must use .png")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            raise FileExistsError(target)
+        before = source_stat_guard(source)
+        try:
+            with self.bridge.session() as (application, active_document):
+                active_path = str(getattr(active_document, "FullFileName", "") or "")
+                if active_path and Path(active_path).resolve() == source:
+                    raise CorelDrawBridgeError("source CDR is already active")
+                opened = self._open_document(application, source)
+                try:
+                    shape_by_id, parent_by_id = self._shape_map(opened)
+                    included = set(region.included_object_ids)
+                    missing = included - set(shape_by_id)
+                    if missing:
+                        raise CorelDrawBridgeError(
+                            "region references unavailable Corel objects: "
+                            + ", ".join(sorted(missing))
+                        )
+                    top_level_ids = sorted(
+                        object_id
+                        for object_id in included
+                        if parent_by_id[object_id] not in included
+                    )
+                    if not top_level_ids:
+                        raise CorelDrawBridgeError("region contains no selectable objects")
+                    try:
+                        opened.ClearSelection()
+                    except Exception:
+                        pass
+                    shape_range = application.CreateShapeRange()
+                    for object_id in top_level_ids:
+                        shape_range.Add(shape_by_id[object_id])
+                    shape_range.CreateSelection()
+
+                    export_width, export_height = bounded_export_size(
+                        region.bounds.width,
+                        region.bounds.height,
+                        max_dimension=max_dimension,
+                        max_pixels=max_pixels,
+                    )
+                    options = application.CreateStructExportOptions()
+                    palette = application.CreateStructPaletteOptions()
+                    options.ImageType = CDR_RGB_COLOR_IMAGE
+                    options.Overwrite = False
+                    options.ResolutionX = dpi
+                    options.ResolutionY = dpi
+                    options.MaintainAspect = True
+                    options.SizeX = export_width
+                    options.SizeY = export_height
+                    export_filter = opened.ExportEx(
+                        str(target), CDR_PNG, CDR_SELECTION, options, palette
+                    )
+                    export_filter.Finish()
+                finally:
+                    try:
+                        opened.Close()
+                    except Exception as exc:
+                        raise CorelDrawBridgeError(
+                            f"could not close source CDR without saving: {exc}"
+                        ) from exc
+        finally:
+            assert_source_unchanged(source, before)
+        if not target.is_file() or target.stat().st_size == 0:
+            raise CorelDrawBridgeError("Corel region export produced no file")
+        return target
+
     def _inspect_opened(
         self,
         application: Any,
@@ -352,6 +483,20 @@ class CompanyCdrInspector:
                     fill=fill,
                     metadata={
                         "corel_type": int(getattr(shape, "Type", 0) or 0),
+                        "source_page": 1,
+                        "source_layer": str(
+                            getattr(getattr(shape, "Layer", None), "Name", "default")
+                        ),
+                        "visible": _bool(_attribute(shape, "Visible", True), True),
+                        "printable": _bool(
+                            _attribute(
+                                _attribute(shape, "Layer", None),
+                                "Printable",
+                                None,
+                            ),
+                            None,
+                        ),
+                        "locked": _bool(_attribute(shape, "Locked", False), False),
                         "source_raw_bbox": raw_bbox,
                         "bbox_clipped_to_page": bbox_clipped,
                     },
