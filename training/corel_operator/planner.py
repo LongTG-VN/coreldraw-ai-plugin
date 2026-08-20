@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Protocol
 
 from training.company_archive.models import CdrInspectionV1, CdrObjectV1
@@ -88,6 +89,152 @@ class DeterministicSafePilotPlanner:
                 "font_scale": self.scale,
             },
         )
+
+
+_PHONE = re.compile(r"(?<!\d)(?:\+?84|0)(?:[ .-]?\d){8,10}(?!\d)")
+_PRICE = re.compile(r"(?i)(?<!\w)\d+(?:[., ]\d{3})*(?:\s?)(?:k|đ|₫|vnd)(?!\w)")
+
+
+class DeterministicMutationPilotPlanner:
+    """Diversify safe mechanical edits without making aesthetic decisions."""
+
+    def __init__(self) -> None:
+        self.font_planner = DeterministicSafePilotPlanner()
+
+    @staticmethod
+    def _base_candidates(inspection: CdrInspectionV1) -> list[CdrObjectV1]:
+        return [
+            item
+            for item in _unique_named(inspection.objects)
+            if not bool(item.metadata.get("locked", False))
+            and not bool(item.metadata.get("bbox_clipped_to_page", False))
+        ]
+
+    def plan(
+        self, inspection: CdrInspectionV1, *, source_token: str
+    ) -> MutationPlanV1 | None:
+        candidates = self._base_candidates(inspection)
+        if not candidates:
+            return None
+        mode = int(hashlib.sha256(source_token.encode("utf-8")).hexdigest()[:2], 16) % 4
+        plan_id = "pilot-" + source_token.removeprefix("source:")[:24]
+
+        if mode == 1:
+            replaceable = [
+                item
+                for item in candidates
+                if item.object_type == "text"
+                and item.text
+                and (_PHONE.search(item.text) or _PRICE.search(item.text))
+            ]
+            if replaceable:
+                chosen = sorted(replaceable, key=lambda item: item.object_id)[0]
+                is_phone = bool(_PHONE.search(chosen.text or ""))
+                replacement = "0900 000 000" if is_phone else "99K"
+                return MutationPlanV1(
+                    plan_id=plan_id,
+                    intent="verify explicit benchmark text replacement on a working copy",
+                    source="deterministic",
+                    actions=[
+                        MutationActionV1(
+                            operation="replace_text",
+                            target=TargetSelectorV1(
+                                kind="object_id",
+                                value=chosen.object_id,
+                                object_type="text",
+                            ),
+                            value=replacement,
+                            precondition_object_type="text",
+                        )
+                    ],
+                    metadata={
+                        "planner": "DeterministicMutationPilotPlanner",
+                        "planner_is_ai": False,
+                        "operation_mode": "replace_phone" if is_phone else "replace_price",
+                        "benchmark_sample_data": True,
+                        "customer_content_changed_on_working_copy": True,
+                    },
+                )
+
+        if mode == 2:
+            movable = [
+                item
+                for item in candidates
+                if item.parent_id is None
+                and item.object_type != "group"
+                and item.bbox["x"] + item.bbox["width"] + 1 <= inspection.page_width
+                and item.bbox["y"] + item.bbox["height"] + 1 <= inspection.page_height
+            ]
+            if movable:
+                chosen = sorted(movable, key=lambda item: item.object_id)[0]
+                return MutationPlanV1(
+                    plan_id=plan_id,
+                    intent="verify a one-millimetre bounded position change on a working copy",
+                    source="deterministic",
+                    actions=[
+                        MutationActionV1(
+                            operation="move",
+                            target=TargetSelectorV1(
+                                kind="object_id",
+                                value=chosen.object_id,
+                                object_type=chosen.object_type,
+                            ),
+                            value={"x": chosen.bbox["x"] + 1, "y": chosen.bbox["y"] + 1},
+                            precondition_object_type=chosen.object_type,
+                        )
+                    ],
+                    metadata={
+                        "planner": "DeterministicMutationPilotPlanner",
+                        "planner_is_ai": False,
+                        "operation_mode": "move_1mm",
+                        "customer_content_changed_on_working_copy": False,
+                    },
+                )
+
+        if mode == 3:
+            resizable = [
+                item
+                for item in candidates
+                if item.parent_id is None
+                and item.object_type != "group"
+                and item.bbox["width"] > 0
+                and item.bbox["height"] > 0
+                and item.bbox["x"] + item.bbox["width"] * 1.01 <= inspection.page_width
+                and item.bbox["y"] + item.bbox["height"] * 1.01 <= inspection.page_height
+            ]
+            if resizable:
+                chosen = sorted(resizable, key=lambda item: item.object_id)[0]
+                return MutationPlanV1(
+                    plan_id=plan_id,
+                    intent="verify a one-percent bounded resize on a working copy",
+                    source="deterministic",
+                    actions=[
+                        MutationActionV1(
+                            operation="resize",
+                            target=TargetSelectorV1(
+                                kind="object_id",
+                                value=chosen.object_id,
+                                object_type=chosen.object_type,
+                            ),
+                            value={
+                                "width": round(chosen.bbox["width"] * 1.01, 6),
+                                "height": round(chosen.bbox["height"] * 1.01, 6),
+                            },
+                            precondition_object_type=chosen.object_type,
+                        )
+                    ],
+                    metadata={
+                        "planner": "DeterministicMutationPilotPlanner",
+                        "planner_is_ai": False,
+                        "operation_mode": "resize_1_percent",
+                        "customer_content_changed_on_working_copy": False,
+                    },
+                )
+
+        fallback = self.font_planner.plan(inspection, source_token=source_token)
+        if fallback is not None:
+            fallback.metadata["operation_mode"] = "font_size_plus_5_percent"
+        return fallback
 
 
 class PlannerOutputError(ValueError):

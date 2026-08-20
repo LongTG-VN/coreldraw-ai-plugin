@@ -8,7 +8,7 @@ from pathlib import Path
 
 from training.company_archive.inspector import CompanyCdrInspector
 from training.corel_operator.models import OperatorExecutionResultV1, OperatorResultClass
-from training.corel_operator.planner import DeterministicSafePilotPlanner
+from training.corel_operator.planner import DeterministicMutationPilotPlanner
 from training.corel_operator.policy import source_token
 from training.corel_operator.service import SafeCorelOperator
 
@@ -26,7 +26,7 @@ def main() -> int:
     source = Path(str(row["absolute_path"])).resolve()
     token = source_token(source, args.archive_root)
     inspection = CompanyCdrInspector().inspect(source, archive_root=args.archive_root)
-    plan = DeterministicSafePilotPlanner().plan(inspection, source_token=token)
+    plan = DeterministicMutationPilotPlanner().plan(inspection, source_token=token)
     if plan is None:
         result = OperatorExecutionResultV1(
             result=OperatorResultClass.UNSUPPORTED,

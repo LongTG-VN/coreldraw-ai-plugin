@@ -41,6 +41,7 @@ def _tracked_state(item: CdrObjectV1) -> dict[str, Any]:
         "alignment": item.alignment,
         "fill": item.fill,
         "stroke": item.stroke,
+        "outside_canvas": bool(item.metadata.get("bbox_clipped_to_page", False)),
     }
 
 

@@ -9,6 +9,7 @@ from training.company_archive.models import CdrInspectionV1, CdrObjectV1
 from training.corel_operator.batch import OperatorBatchRunner
 from training.corel_operator.models import OperatorExecutionResultV1, OperatorResultClass
 from training.corel_operator.planner import (
+    DeterministicMutationPilotPlanner,
     DeterministicSafePilotPlanner,
     PlannerOutputError,
     validate_planner_output,
@@ -87,6 +88,23 @@ def test_fixture_planner_preserves_customer_content() -> None:
 def test_planner_boundary_rejects_raw_com_payload() -> None:
     with pytest.raises(PlannerOutputError):
         validate_planner_output({"plan_id": "bad", "raw_com": "document.Save()"})
+
+
+def test_mutation_pilot_planner_marks_benchmark_phone_replacement() -> None:
+    inspection = _inspection()
+    inspection.objects[0].text = "0901 234 567"
+    plan = None
+    for index in range(512):
+        candidate = DeterministicMutationPilotPlanner().plan(
+            inspection, source_token=f"source:{index}"
+        )
+        if candidate and candidate.metadata.get("operation_mode") == "replace_phone":
+            plan = candidate
+            break
+    assert plan is not None
+    assert plan.metadata["benchmark_sample_data"] is True
+    assert plan.metadata["customer_content_changed_on_working_copy"] is True
+    assert plan.actions[0].value == "0900 000 000"
 
 
 def test_batch_isolates_failure_and_resumes(tmp_path: Path) -> None:
