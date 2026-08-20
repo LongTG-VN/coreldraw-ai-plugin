@@ -67,11 +67,10 @@ def resolve_target(
     if selector.require_unique and len(candidates) != 1:
         raise AmbiguousTargetError(f"selector matched {len(candidates)} objects")
     chosen = candidates[0]
-    duplicate_names = [item for item in objects if item.corel_name == chosen.corel_name]
-    if len(duplicate_names) != 1:
-        raise AmbiguousTargetError(
-            f"Corel object name '{chosen.corel_name}' is not unique"
-        )
+    # Corel names are optional metadata and are frequently empty or duplicated in
+    # real company documents.  The runtime executes through the inspector's
+    # stable operator object ID, so name uniqueness must not reduce target
+    # coverage after the selector itself has resolved exactly one object.
     return ResolvedTargetV1(
         object_id=chosen.object_id,
         corel_name=chosen.corel_name,

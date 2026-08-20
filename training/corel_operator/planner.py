@@ -18,11 +18,17 @@ class StructuredOperatorPlanner(Protocol):
     def plan(self, inspection: CdrInspectionV1, *, source_token: str) -> MutationPlanV1 | None: ...
 
 
-def _unique_named(objects: list[CdrObjectV1]) -> list[CdrObjectV1]:
+def _stable_targetable(objects: list[CdrObjectV1]) -> list[CdrObjectV1]:
+    """Return objects addressable by a unique stable inspector ID.
+
+    Corel object names are not identifiers: real documents commonly contain
+    blank and duplicate names.  Runtime mutation uses ``operator_object_id``.
+    """
+
     counts: dict[str, int] = {}
     for item in objects:
-        counts[item.corel_name] = counts.get(item.corel_name, 0) + 1
-    return [item for item in objects if counts[item.corel_name] == 1]
+        counts[item.object_id] = counts.get(item.object_id, 0) + 1
+    return [item for item in objects if item.object_id and counts[item.object_id] == 1]
 
 
 class DeterministicSafePilotPlanner:
@@ -45,7 +51,7 @@ class DeterministicSafePilotPlanner:
     ) -> MutationPlanV1 | None:
         candidates = [
             item
-            for item in _unique_named(inspection.objects)
+            for item in _stable_targetable(inspection.objects)
             if item.object_type == "text"
             and item.text
             and item.font_size is not None
@@ -112,7 +118,7 @@ class DeterministicMutationPilotPlanner:
     def _base_candidates(inspection: CdrInspectionV1) -> list[CdrObjectV1]:
         return [
             item
-            for item in _unique_named(inspection.objects)
+            for item in _stable_targetable(inspection.objects)
             if not bool(item.metadata.get("locked", False))
             and not bool(item.metadata.get("bbox_clipped_to_page", False))
         ]

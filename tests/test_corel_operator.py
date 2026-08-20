@@ -14,7 +14,7 @@ from training.corel_operator.models import (
 )
 from training.corel_operator.policy import OperatorPolicyError, validate_working_copy_path
 from training.corel_operator.service import SafeCorelOperator
-from training.corel_operator.targets import AmbiguousTargetError, resolve_target
+from training.corel_operator.targets import resolve_target
 
 
 def _object(
@@ -82,9 +82,9 @@ class FakeRuntime:
         if self.fail_transaction:
             raise RuntimeError("disconnected")
         self.before_transaction = self.current.model_copy(deep=True)
-        by_name = {item.corel_name: item for item in self.current.objects}
+        by_id = {item.object_id: item for item in self.current.objects}
         for operation in operations:
-            item = by_name[operation["shape_name"]]
+            item = by_id[operation["operator_object_id"]]
             if operation["op"] == "typography":
                 if "text" in operation:
                     item.text = operation["text"]
@@ -190,10 +190,11 @@ def test_ambiguous_text_needs_review_without_mutation(tmp_path: Path) -> None:
     assert result.source_unchanged is True
 
 
-def test_duplicate_corel_names_are_ambiguous() -> None:
+def test_duplicate_corel_names_resolve_by_stable_operator_id() -> None:
     objects = [_object("one", "duplicate", text="A"), _object("two", "duplicate", text="B")]
-    with pytest.raises(AmbiguousTargetError):
-        resolve_target(objects, TargetSelectorV1(kind="object_id", value="one"))
+    resolved = resolve_target(objects, TargetSelectorV1(kind="object_id", value="one"))
+    assert resolved.object_id == "one"
+    assert resolved.corel_name == "duplicate"
 
 
 def test_unexpected_untargeted_change_triggers_verified_rollback(tmp_path: Path) -> None:

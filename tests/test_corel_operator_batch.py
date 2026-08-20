@@ -85,6 +85,17 @@ def test_fixture_planner_preserves_customer_content() -> None:
     assert plan.actions[0].value == 21.0
 
 
+def test_fixture_planner_targets_blank_corel_name_by_stable_id() -> None:
+    inspection = _inspection()
+    inspection.objects[0].corel_name = ""
+    plan = DeterministicSafePilotPlanner().plan(
+        inspection, source_token="source:unnamed"
+    )
+    assert plan is not None
+    assert plan.actions[0].target.kind.value == "object_id"
+    assert plan.actions[0].target.value == "headline"
+
+
 def test_planner_boundary_rejects_raw_com_payload() -> None:
     with pytest.raises(PlannerOutputError):
         validate_planner_output({"plan_id": "bad", "raw_com": "document.Save()"})
