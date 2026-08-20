@@ -122,6 +122,23 @@ class CorelOperatorRuntime:
             document.Close()
             return True
 
+    def close_active_if_exact(self, path: Path) -> bool:
+        """Close one exact source path without Save and verify its stat guard."""
+
+        expected = path.expanduser().resolve()
+        before = source_stat_guard(expected)
+        with self.bridge.session() as (_application, document):
+            active = self._active_path(document)
+            if active is None:
+                return False
+            if active != expected:
+                raise CorelDrawBridgeError(
+                    f"refusing to close unexpected active document: {active}"
+                )
+            document.Close()
+        assert_source_unchanged(expected, before)
+        return True
+
     def export_png(
         self,
         path: Path,

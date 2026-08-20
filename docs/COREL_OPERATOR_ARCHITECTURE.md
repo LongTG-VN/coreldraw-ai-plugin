@@ -77,7 +77,7 @@ After save, the operator closes and reopens the generated CDR through CorelDRAW.
 
 ## Planner boundary
 
-`StructuredOperatorPlanner` is model-agnostic. The current real mutation pilot uses `DeterministicSafePilotPlanner`, explicitly marked `planner_is_ai: false`. It preserves all customer text and changes the font size of one uniquely named editable text object by five percent. It exists to test the operator, not to judge aesthetics.
+`StructuredOperatorPlanner` is model-agnostic. The real mutation pilot uses `DeterministicMutationPilotPlanner`, explicitly marked `planner_is_ai: false`. It selects a bounded mechanical operation (font size by five percent, move by one millimetre, resize by one percent, or an explicitly marked benchmark phone/price replacement) on a uniquely addressable object. Replacement values exist only in generated working copies and are tagged `benchmark_sample_data: true`; they are never represented as customer-supplied data. The planner exists to test operator coverage, not to judge aesthetics.
 
 Future LLM output must pass `validate_planner_output`. Invalid or extra fields—including raw COM payloads—are rejected.
 

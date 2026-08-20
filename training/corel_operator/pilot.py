@@ -154,7 +154,12 @@ class MutationPilotRunner:
             try:
                 self.runtime.close_active_if_under(self.workspace)
             except Exception as exc:
-                recovery_error = sanitize_error(exc, archive_root=self.archive_root)
+                try:
+                    self.runtime.close_active_if_exact(source)
+                except Exception as source_close_exc:
+                    recovery_error = sanitize_error(
+                        source_close_exc, archive_root=self.archive_root
+                    )
             result = {
                 "result": OperatorResultClass.FAILED.value,
                 "source_token": token,

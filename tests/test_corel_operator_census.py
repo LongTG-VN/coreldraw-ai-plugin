@@ -81,6 +81,10 @@ def test_isolated_census_timeout_is_persistable_and_recovers(
             self.closed = True
             return True
 
+        def close_active_if_exact(self, path: Path) -> bool:
+            self.closed = True
+            return True
+
     recovery = Recovery()
     runner.runtime = recovery  # type: ignore[assignment]
 
@@ -99,6 +103,44 @@ def test_isolated_census_timeout_is_persistable_and_recovers(
     assert result["error_category"] == "TIMEOUT"
     assert result["source_unchanged"] is True
     assert recovery.closed is True
+
+
+def test_timeout_recovery_may_close_only_the_exact_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    archive = tmp_path / "archive"
+    workspace = tmp_path / "workspace"
+    archive.mkdir()
+    source = archive / "slow.cdr"
+    source.write_bytes(b"source")
+    runner = OperatorCensusRunner(archive_root=archive, workspace=workspace)
+
+    class Recovery:
+        exact: Path | None = None
+
+        def close_active_if_under(self, root: Path) -> bool:
+            raise RuntimeError("active source is outside workspace")
+
+        def close_active_if_exact(self, path: Path) -> bool:
+            self.exact = path
+            return True
+
+    recovery = Recovery()
+    runner.runtime = recovery  # type: ignore[assignment]
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    row = {
+        "file_id": "file:" + "c" * 32,
+        "absolute_path": str(source),
+        "size_bytes": source.stat().st_size,
+        "cdr_candidate": True,
+    }
+    result = runner._run_one_isolated(row, timeout_seconds=10)
+    assert result["checks"]["CLOSE_OK"] is True
+    assert recovery.exact == source.resolve()
 
 
 def test_retry_failures_reprocesses_only_when_explicit(tmp_path: Path) -> None:
