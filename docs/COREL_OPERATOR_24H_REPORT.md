@@ -1,5 +1,7 @@
 # CorelDRAW AI Operator — Engineering Run Report
 
+> Historical Run #1 report. Run #2 adds the local MCP/task-agent boundary, visual-integrity QA, stable target-resolution fix, and a real 100-file scale test. See `docs/COREL_OPERATOR_RUN2_PRODUCTION_READINESS.md`.
+
 ## Result
 
 `COREL_OPERATOR_PARTIAL_BUT_USABLE`
