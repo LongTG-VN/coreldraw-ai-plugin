@@ -82,6 +82,7 @@ class MutationPlanV1(StrictModel):
     actions: list[MutationActionV1] = Field(min_length=1, max_length=50)
     expected_object_count_change: Literal[0] = 0
     rollback_on_error: Literal[True] = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ResolvedTargetV1(StrictModel):

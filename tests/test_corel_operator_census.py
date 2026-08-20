@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
-from training.corel_operator.census import classify_failure, select_census_rows
+from training.corel_operator.census import (
+    OperatorCensusRunner,
+    classify_failure,
+    select_census_rows,
+)
 from training.corel_operator.state import OperatorStateDatabase
 
 
@@ -57,3 +62,40 @@ def test_failure_classification_is_sanitized_category_only() -> None:
     assert classify_failure("RPC server unavailable") == "COREL_RUNTIME"
     assert classify_failure("could not save copy") == "COREL_SAVE_AS"
     assert classify_failure("random") == "UNKNOWN"
+
+
+def test_isolated_census_timeout_is_persistable_and_recovers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    archive = tmp_path / "archive"
+    workspace = tmp_path / "workspace"
+    archive.mkdir()
+    source = archive / "slow.cdr"
+    source.write_bytes(b"source")
+    runner = OperatorCensusRunner(archive_root=archive, workspace=workspace)
+
+    class Recovery:
+        closed = False
+
+        def close_active_if_under(self, root: Path) -> bool:
+            self.closed = True
+            return True
+
+    recovery = Recovery()
+    runner.runtime = recovery  # type: ignore[assignment]
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    row = {
+        "file_id": "file:" + "a" * 32,
+        "absolute_path": str(source),
+        "size_bytes": source.stat().st_size,
+        "cdr_candidate": True,
+    }
+    result = runner._run_one_isolated(row, timeout_seconds=10)
+    assert result["status"] == "FAILED"
+    assert result["error_category"] == "TIMEOUT"
+    assert result["source_unchanged"] is True
+    assert recovery.closed is True

@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import subprocess
+import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -121,7 +123,7 @@ class OperatorCensusRunner:
                     "SNAPSHOT_OK": True,
                 }
             )
-            region_analysis = analyze_design_regions(inspection)
+            region_analysis = analyze_design_regions(inspection, design_id=token)
             checks["PASTEBOARD_ENUM_OK"] = (
                 len(region_analysis.objects) == inspection.object_count
             )
@@ -211,14 +213,116 @@ class OperatorCensusRunner:
         return result
 
     def run(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        return self.run_isolated(rows)
+
+    def run_isolated(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        timeout_seconds: float = 180.0,
+    ) -> dict[str, Any]:
+        """Run each CDR in a killable worker while persisting every outcome."""
+
+        if timeout_seconds < 10:
+            raise ValueError("census timeout must be at least 10 seconds")
         completed = self.state.census_tokens(statuses=("COMPLETE", "FAILED"))
-        for row in rows:
+        total = len(rows)
+        for index, row in enumerate(rows, start=1):
             token = source_token(Path(str(row["absolute_path"])), self.archive_root)
             if token in completed:
+                print(f"[{index}/{total}] {token} RESUME_SKIP", flush=True)
                 continue
-            result = self.run_one(row)
+            result = self._run_one_isolated(row, timeout_seconds=timeout_seconds)
             self.state.put_census(token, str(row["file_id"]), result["status"], result)
+            print(
+                f"[{index}/{total}] {token} {result['status']} "
+                f"{result.get('error_category') or ''}",
+                flush=True,
+            )
         return self.write_reports(expected_count=len(rows))
+
+    def _run_one_isolated(
+        self, row: dict[str, Any], *, timeout_seconds: float
+    ) -> dict[str, Any]:
+        source = Path(str(row["absolute_path"])).resolve()
+        token = source_token(source, self.archive_root)
+        guard = source_stat_guard(source)
+        worker_root = self.workspace / "_worker"
+        worker_root.mkdir(parents=True, exist_ok=True)
+        stem = token.removeprefix("source:")
+        request_path = worker_root / f"{stem}.request.json"
+        response_path = worker_root / f"{stem}.response.json"
+        request_path.write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
+        if response_path.exists():
+            response_path.unlink()
+        command = [
+            sys.executable,
+            "-m",
+            "training.tools.run_corel_operator_census_worker",
+            "--archive-root",
+            str(self.archive_root),
+            "--workspace",
+            str(self.workspace),
+            "--request",
+            str(request_path),
+            "--response",
+            str(response_path),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=Path.cwd(),
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+            if completed.returncode != 0 or not response_path.is_file():
+                error = completed.stderr.strip() or completed.stdout.strip() or (
+                    f"worker exited {completed.returncode} without a result"
+                )
+                result = {
+                    "source_token": token,
+                    "file_id": row["file_id"],
+                    "size_bytes": int(row["size_bytes"]),
+                    "status": "FAILED",
+                    "checks": {},
+                    "counts": {},
+                    "timings_ms": {},
+                    "error_category": "WORKER_FAILURE",
+                    "error": sanitize_error(error, archive_root=self.archive_root),
+                    "operator_eligible": False,
+                    "source_unchanged": False,
+                }
+            else:
+                result = json.loads(response_path.read_text(encoding="utf-8"))
+        except subprocess.TimeoutExpired:
+            recovery_error = None
+            try:
+                self.runtime.close_active_if_under(self.workspace)
+            except Exception as exc:
+                recovery_error = sanitize_error(exc, archive_root=self.archive_root)
+            result = {
+                "source_token": token,
+                "file_id": row["file_id"],
+                "size_bytes": int(row["size_bytes"]),
+                "status": "FAILED",
+                "checks": {"CLOSE_OK": recovery_error is None},
+                "counts": {},
+                "timings_ms": {"total": timeout_seconds * 1000},
+                "error_category": "TIMEOUT",
+                "error": f"per-file census timeout after {timeout_seconds:.1f}s",
+                "operator_eligible": False,
+                "source_unchanged": False,
+                "recovery_error": recovery_error,
+            }
+        finally:
+            for generated in (request_path, response_path):
+                if generated.exists():
+                    generated.unlink()
+        assert_source_unchanged(source, guard)
+        result["source_unchanged"] = True
+        return result
 
     def write_reports(self, *, expected_count: int) -> dict[str, Any]:
         rows = [item["result"] for item in self.state.census_rows()]

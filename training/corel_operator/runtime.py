@@ -105,6 +105,23 @@ class CorelOperatorRuntime:
         with self.bridge.session() as (_application, document):
             document.Close()
 
+    def close_active_if_under(self, root: Path) -> bool:
+        """Close only a generated document proven to live below ``root``."""
+
+        allowed = root.expanduser().resolve()
+        with self.bridge.session() as (_application, document):
+            active = self._active_path(document)
+            if active is None:
+                return False
+            try:
+                active.relative_to(allowed)
+            except ValueError as exc:
+                raise CorelDrawBridgeError(
+                    f"refusing to close active document outside operator workspace: {active}"
+                ) from exc
+            document.Close()
+            return True
+
     def export_png(
         self,
         path: Path,
