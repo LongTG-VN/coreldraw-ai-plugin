@@ -34,7 +34,7 @@ Neither a language model nor a future MCP client may submit raw COM, VBA, Python
 
 Company source files are resolved under an explicit archive root and restricted to `.cdr` or `.cdt`. Before any operation, the operator records source size, modification time, and creation/change time. Corel opens the source only long enough to execute `SaveAs` to a new `.cdr` below the operator workspace. All mutation, save, reopen, PNG, and PDF work happens on that copy. The source stat guard is checked again at the end.
 
-An active document is closed automatically after timeout recovery only if its resolved path is below the operator workspace. A document outside that root is never closed or saved by recovery logic.
+Timeout recovery closes a document without saving only when it is either a generated working copy below the operator workspace or the exact timed-out source path supplied to the worker. The exact-source path is resolved, matched case-insensitively, closed with `Close()` (never `Save()`), and checked against the source stat guard afterward. Recovery never closes an unrelated active document and never kills CorelDRAW automatically.
 
 ## Structured contracts
 
