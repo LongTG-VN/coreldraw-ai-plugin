@@ -62,6 +62,22 @@ def _validate_mutation_scope(
     targets: list[ResolvedTargetV1],
 ) -> list[str]:
     errors: list[str] = []
+    document_state_before = (
+        before.page_count,
+        before.page_width,
+        before.page_height,
+        before.unit,
+        before.corel_unit_code,
+    )
+    document_state_after = (
+        after.page_count,
+        after.page_width,
+        after.page_height,
+        after.unit,
+        after.corel_unit_code,
+    )
+    if document_state_before != document_state_after:
+        errors.append("document page geometry or units changed outside policy")
     if before.object_count != after.object_count:
         errors.append(
             f"object count changed from {before.object_count} to {after.object_count}"

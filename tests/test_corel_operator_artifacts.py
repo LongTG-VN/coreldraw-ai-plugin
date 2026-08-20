@@ -69,3 +69,45 @@ def test_artifact_rejects_preview_outside_workspace(tmp_path: Path) -> None:
             output_root=output,
             state_rows=rows,
         )
+
+
+def test_mutation_review_artifact_includes_visual_qa_needs_review(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "pilot"
+    output = tmp_path / "private"
+    workspace.mkdir()
+    before = workspace / "before.png"
+    after = workspace / "after.png"
+    Image.new("RGB", (120, 80), "white").save(before)
+    Image.new("RGB", (130, 80), "white").save(after)
+    rows = [
+        {
+            "result": {
+                "result": "NEEDS_REVIEW",
+                "source_token": "source:visual-review",
+                "preview_before": str(before),
+                "preview_after": str(after),
+                "editability_verified": True,
+                "source_unchanged": True,
+                "metadata": {
+                    "visual_qa": {
+                        "status": "NEEDS_REVIEW",
+                        "issues": ["PREVIEW_DIMENSION_CHANGED"],
+                    }
+                },
+            }
+        }
+    ]
+
+    summary = build_mutation_review_artifacts(
+        pilot_workspace=workspace,
+        output_root=output,
+        state_rows=rows,
+    )
+
+    assert summary["comparison_count"] == 1
+    assert summary["auto_success_comparison_count"] == 0
+    assert summary["needs_review_comparison_count"] == 1
+    manifest = (output / "manifest.csv").read_text(encoding="utf-8")
+    assert "PREVIEW_DIMENSION_CHANGED" in manifest

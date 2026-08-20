@@ -65,6 +65,7 @@ class FakeRuntime:
         self.is_open = False
         self.fail_transaction = False
         self.change_untargeted = False
+        self.change_page_geometry = False
         self.closed = 0
 
     def create_working_copy(self, source: Path, target: Path) -> None:
@@ -105,6 +106,8 @@ class FakeRuntime:
                     item.rotation = float(operation["rotation"])
         if self.change_untargeted:
             self.current.objects[-1].fill = {"unexpected": True}
+        if self.change_page_geometry:
+            self.current.page_width += 1
         return {"status": "committed"}
 
     def undo(self) -> None:
@@ -229,6 +232,28 @@ def test_runtime_failure_isolated_and_document_closed(tmp_path: Path) -> None:
     assert result.error_code == "COREL_RUNTIME_FAILURE"
     assert runtime.is_open is False
     assert source.read_bytes() == b"SOURCE"
+
+
+def test_unexpected_page_geometry_change_triggers_verified_rollback(
+    tmp_path: Path,
+) -> None:
+    archive, workspace, source, target = _paths(tmp_path)
+    original = _inspection([_object("one", "headline", text="Old")])
+    runtime = FakeRuntime(original)
+    runtime.change_page_geometry = True
+
+    result = SafeCorelOperator(runtime).execute(
+        source_path=source,
+        archive_root=archive,
+        workspace=workspace,
+        working_copy_path=target,
+        plan=_plan(TargetSelectorV1(kind="object_id", value="one")),
+    )
+
+    assert result.result == OperatorResultClass.FAILED
+    assert result.rollback_verified is True
+    assert "page geometry" in str(result.error)
+    assert runtime.current == original
 
 
 def test_working_copy_policy_rejects_source_and_escape(tmp_path: Path) -> None:

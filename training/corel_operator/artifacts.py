@@ -55,9 +55,12 @@ def build_mutation_review_artifacts(
     sheets.mkdir(parents=True, exist_ok=True)
     manifest_rows: list[dict[str, Any]] = []
     comparison_paths: list[Path] = []
+    included_results = {"AUTO_SUCCESS", "SUCCESS_WITH_WARNING", "NEEDS_REVIEW"}
     for index, state_row in enumerate(state_rows, start=1):
         result = state_row["result"]
-        if result.get("result") not in {"AUTO_SUCCESS", "SUCCESS_WITH_WARNING"}:
+        if result.get("result") not in included_results:
+            continue
+        if not result.get("preview_before") or not result.get("preview_after"):
             continue
         before = _approved_preview(str(result["preview_before"]), workspace)
         after = _approved_preview(str(result["preview_after"]), workspace)
@@ -84,6 +87,15 @@ def build_mutation_review_artifacts(
                 "object_count_after": result.get("object_count_after"),
                 "editability_verified": bool(result.get("editability_verified")),
                 "source_unchanged": bool(result.get("source_unchanged")),
+                "visual_qa_status": result.get("metadata", {})
+                .get("visual_qa", {})
+                .get("status", ""),
+                "visual_qa_issues": "|".join(
+                    str(issue)
+                    for issue in result.get("metadata", {})
+                    .get("visual_qa", {})
+                    .get("issues", [])
+                ),
             }
         )
 
@@ -109,6 +121,8 @@ def build_mutation_review_artifacts(
         "object_count_after",
         "editability_verified",
         "source_unchanged",
+        "visual_qa_status",
+        "visual_qa_issues",
     ]
     with manifest.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames)
@@ -117,6 +131,13 @@ def build_mutation_review_artifacts(
     summary = {
         "artifact_name": "chatgpt-corel-operator-mutation-pilot-001",
         "comparison_count": len(comparison_paths),
+        "auto_success_comparison_count": sum(
+            row["result"] in {"AUTO_SUCCESS", "SUCCESS_WITH_WARNING"}
+            for row in manifest_rows
+        ),
+        "needs_review_comparison_count": sum(
+            row["result"] == "NEEDS_REVIEW" for row in manifest_rows
+        ),
         "contact_sheet_count": len(contact_sheet_paths),
         "cdr_files_included": 0,
         "sqlite_files_included": 0,
