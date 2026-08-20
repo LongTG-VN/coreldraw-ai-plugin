@@ -91,24 +91,51 @@ def _validate_mutation_scope(
 def _operation_payload(action: MutationActionV1, target: ResolvedTargetV1) -> dict[str, Any]:
     name = target.corel_name
     if action.operation == OperationKind.REPLACE_TEXT:
-        return {"op": "typography", "shape_name": name, "text": str(action.value)}
+        return {
+            "op": "typography",
+            "shape_name": name,
+            "operator_object_id": target.object_id,
+            "text": str(action.value),
+        }
     if action.operation == OperationKind.SET_FONT:
-        return {"op": "typography", "shape_name": name, "font_name": str(action.value)}
+        return {
+            "op": "typography",
+            "shape_name": name,
+            "operator_object_id": target.object_id,
+            "font_name": str(action.value),
+        }
     if action.operation == OperationKind.SET_FONT_SIZE:
-        return {"op": "typography", "shape_name": name, "font_size": float(action.value)}
+        return {
+            "op": "typography",
+            "shape_name": name,
+            "operator_object_id": target.object_id,
+            "font_size": float(action.value),
+        }
     if action.operation == OperationKind.MOVE:
         value = dict(action.value)  # type: ignore[arg-type]
-        return {"op": "transform", "shape_name": name, "x": value["x"], "y": value["y"]}
+        return {
+            "op": "transform",
+            "shape_name": name,
+            "operator_object_id": target.object_id,
+            "x": value["x"],
+            "y": value["y"],
+        }
     if action.operation == OperationKind.RESIZE:
         value = dict(action.value)  # type: ignore[arg-type]
         return {
             "op": "transform",
             "shape_name": name,
+            "operator_object_id": target.object_id,
             "width": value["width"],
             "height": value["height"],
         }
     if action.operation == OperationKind.ROTATE:
-        return {"op": "transform", "shape_name": name, "rotation": float(action.value)}
+        return {
+            "op": "transform",
+            "shape_name": name,
+            "operator_object_id": target.object_id,
+            "rotation": float(action.value),
+        }
     raise OperatorPolicyError(f"unsupported operation: {action.operation.value}")
 
 

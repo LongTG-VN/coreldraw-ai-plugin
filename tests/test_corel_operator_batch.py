@@ -93,18 +93,22 @@ def test_planner_boundary_rejects_raw_com_payload() -> None:
 def test_mutation_pilot_planner_marks_benchmark_phone_replacement() -> None:
     inspection = _inspection()
     inspection.objects[0].text = "0901 234 567"
-    plan = None
-    for index in range(512):
-        candidate = DeterministicMutationPilotPlanner().plan(
-            inspection, source_token=f"source:{index}"
-        )
-        if candidate and candidate.metadata.get("operation_mode") == "replace_phone":
-            plan = candidate
-            break
+    plan = DeterministicMutationPilotPlanner(preferred_mode="replace").plan(
+        inspection, source_token="source:fixture"
+    )
     assert plan is not None
     assert plan.metadata["benchmark_sample_data"] is True
     assert plan.metadata["customer_content_changed_on_working_copy"] is True
     assert plan.actions[0].value == "0900 000 000"
+
+
+def test_targeted_resize_refuses_text_object() -> None:
+    assert (
+        DeterministicMutationPilotPlanner(preferred_mode="resize").plan(
+            _inspection(), source_token="source:fixture"
+        )
+        is None
+    )
 
 
 def test_batch_isolates_failure_and_resumes(tmp_path: Path) -> None:

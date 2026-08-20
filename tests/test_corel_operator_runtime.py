@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from contextlib import contextmanager
+
+import pytest
+
+from training.corel_operator.runtime import CorelOperatorRuntime
+from transaction_engine import DesignTransactionError
+
+
+class Story:
+    def __init__(self) -> None:
+        self.Text = "old"
+        self.Font = "Arial"
+        self.Size = 10.0
+
+
+class Text:
+    def __init__(self) -> None:
+        self.Story = Story()
+
+
+class Shape:
+    def __init__(self) -> None:
+        self.Text = Text()
+        self.SizeWidth = 10.0
+        self.SizeHeight = 2.0
+        self.PositionX = 1.0
+        self.PositionY = 1.0
+        self.RotationAngle = 0.0
+
+
+class Document:
+    def __init__(self, shape: Shape) -> None:
+        self.shape = shape
+        self.started = 0
+        self.ended = 0
+        self.undo_count = 0
+        self._before = shape.Text.Story.Size
+
+    def BeginCommandGroup(self, name: str) -> None:
+        self.started += 1
+        self._before = self.shape.Text.Story.Size
+
+    def EndCommandGroup(self) -> None:
+        self.ended += 1
+
+    def Undo(self) -> None:
+        self.undo_count += 1
+        self.shape.Text.Story.Size = self._before
+
+
+class Bridge:
+    def __init__(self, document: Document) -> None:
+        self.document = document
+
+    @contextmanager
+    def session(self):
+        yield object(), self.document
+
+
+class Inspector:
+    def __init__(self, shape: Shape) -> None:
+        self.shape = shape
+
+    def _shape_map(self, document):
+        return {"object_1": self.shape}, {"object_1": None}
+
+
+def _runtime() -> tuple[CorelOperatorRuntime, Shape, Document]:
+    shape = Shape()
+    document = Document(shape)
+    runtime = CorelOperatorRuntime(bridge=Bridge(document))  # type: ignore[arg-type]
+    runtime.inspector = Inspector(shape)  # type: ignore[assignment]
+    return runtime, shape, document
+
+
+def test_object_transaction_targets_unnamed_shape_by_stable_id() -> None:
+    runtime, shape, document = _runtime()
+    result = runtime.execute_transaction(
+        [
+            {
+                "op": "typography",
+                "shape_name": "synthetic_name_not_used",
+                "operator_object_id": "object_1",
+                "font_size": 11.0,
+            }
+        ],
+        name="test",
+    )
+    assert result["status"] == "committed"
+    assert shape.Text.Story.Size == 11.0
+    assert document.started == document.ended == 1
+
+
+def test_object_transaction_rolls_back_when_later_id_is_missing() -> None:
+    runtime, shape, document = _runtime()
+    with pytest.raises(DesignTransactionError) as raised:
+        runtime.execute_transaction(
+            [
+                {
+                    "op": "typography",
+                    "shape_name": "unused",
+                    "operator_object_id": "object_1",
+                    "font_size": 11.0,
+                },
+                {
+                    "op": "typography",
+                    "shape_name": "unused",
+                    "operator_object_id": "missing",
+                    "font_size": 12.0,
+                },
+            ],
+            name="test",
+        )
+    assert raised.value.report["rolled_back"] is True
+    assert shape.Text.Story.Size == 10.0
+    assert document.undo_count == 1

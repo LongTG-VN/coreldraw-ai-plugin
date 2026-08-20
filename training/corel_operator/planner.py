@@ -98,8 +98,15 @@ _PRICE = re.compile(r"(?i)(?<!\w)\d+(?:[., ]\d{3})*(?:\s?)(?:k|đ|₫|vnd)(?!\w)
 class DeterministicMutationPilotPlanner:
     """Diversify safe mechanical edits without making aesthetic decisions."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        preferred_mode: str = "auto",
+    ) -> None:
+        if preferred_mode not in {"auto", "font", "replace", "move", "resize"}:
+            raise ValueError("unsupported pilot operation mode")
         self.font_planner = DeterministicSafePilotPlanner()
+        self.preferred_mode = preferred_mode
 
     @staticmethod
     def _base_candidates(inspection: CdrInspectionV1) -> list[CdrObjectV1]:
@@ -115,8 +122,19 @@ class DeterministicMutationPilotPlanner:
     ) -> MutationPlanV1 | None:
         candidates = self._base_candidates(inspection)
         if not candidates:
-            return None
-        mode = int(hashlib.sha256(source_token.encode("utf-8")).hexdigest()[:2], 16) % 4
+            if self.preferred_mode not in {"auto", "font"}:
+                return None
+            fallback = self.font_planner.plan(inspection, source_token=source_token)
+            if fallback is not None:
+                fallback.metadata["operation_mode"] = "font_size_plus_5_percent"
+            return fallback
+        mode = (
+            int(hashlib.sha256(source_token.encode("utf-8")).hexdigest()[:2], 16) % 4
+            if self.preferred_mode == "auto"
+            else {"font": 0, "replace": 1, "move": 2, "resize": 3}[
+                self.preferred_mode
+            ]
+        )
         plan_id = "pilot-" + source_token.removeprefix("source:")[:24]
 
         if mode == 1:
@@ -155,6 +173,8 @@ class DeterministicMutationPilotPlanner:
                         "customer_content_changed_on_working_copy": True,
                     },
                 )
+            if self.preferred_mode == "replace":
+                return None
 
         if mode == 2:
             movable = [
@@ -190,13 +210,15 @@ class DeterministicMutationPilotPlanner:
                         "customer_content_changed_on_working_copy": False,
                     },
                 )
+            if self.preferred_mode == "move":
+                return None
 
         if mode == 3:
             resizable = [
                 item
                 for item in candidates
                 if item.parent_id is None
-                and item.object_type != "group"
+                and item.object_type not in {"group", "text"}
                 and item.bbox["width"] > 0
                 and item.bbox["height"] > 0
                 and item.bbox["x"] + item.bbox["width"] * 1.01 <= inspection.page_width
@@ -230,6 +252,8 @@ class DeterministicMutationPilotPlanner:
                         "customer_content_changed_on_working_copy": False,
                     },
                 )
+            if self.preferred_mode == "resize":
+                return None
 
         fallback = self.font_planner.plan(inspection, source_token=source_token)
         if fallback is not None:

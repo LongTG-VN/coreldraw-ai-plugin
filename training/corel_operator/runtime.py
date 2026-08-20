@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 from corel_bridge import CorelDrawBridge, CorelDrawBridgeError, corel_bridge
 from extended_bridge import (
@@ -16,7 +17,7 @@ from extended_bridge import (
 from training.company_archive.inspector import CompanyCdrInspector, bounded_export_size
 from training.company_archive.models import CdrInspectionV1
 from training.company_archive.safety import assert_source_unchanged, source_stat_guard
-from transaction_engine import DesignTransactionEngine
+from transaction_engine import DesignTransactionEngine, DesignTransactionError
 
 
 class OperatorRuntime(Protocol):
@@ -86,12 +87,139 @@ class CorelOperatorRuntime:
     def execute_transaction(
         self, operations: list[dict[str, Any]], *, name: str
     ) -> dict[str, Any]:
+        if operations and all(operation.get("operator_object_id") for operation in operations):
+            return self._execute_object_transaction(operations, name=name)
         return self.transactions.execute(
             operations,
             name=name,
             rollback_on_error=True,
             include_feedback=False,
         )
+
+    def _execute_object_transaction(
+        self, operations: list[dict[str, Any]], *, name: str
+    ) -> dict[str, Any]:
+        """Execute the operator subset against stable traversal IDs, not names."""
+
+        transaction_id = uuid4().hex
+        results: list[dict[str, Any]] = []
+        current_index = -1
+        current_operation: dict[str, Any] | None = None
+        with self.bridge.session() as (_application, document):
+            shape_by_id, _parent_by_id = self.inspector._shape_map(document)
+            group_started = False
+            group_ended = False
+            try:
+                document.BeginCommandGroup(name)
+                group_started = True
+                for current_index, current_operation in enumerate(operations):
+                    object_id = str(current_operation["operator_object_id"])
+                    shape = shape_by_id.get(object_id)
+                    if shape is None:
+                        raise CorelDrawBridgeError(
+                            f"operator object ID is unavailable: {object_id}"
+                        )
+                    op = str(current_operation.get("op", ""))
+                    if op == "typography":
+                        try:
+                            story = shape.Text.Story
+                        except Exception as exc:
+                            raise CorelDrawBridgeError(
+                                f"operator object '{object_id}' is not editable text"
+                            ) from exc
+                        if "text" in current_operation:
+                            try:
+                                story.Text = current_operation["text"]
+                            except Exception:
+                                shape.Text.Story = current_operation["text"]
+                        if "font_name" in current_operation:
+                            story.Font = current_operation["font_name"]
+                        if "font_size" in current_operation:
+                            story.Size = float(current_operation["font_size"])
+                    elif op == "transform":
+                        if "width" in current_operation or "height" in current_operation:
+                            width = float(
+                                current_operation.get("width", getattr(shape, "SizeWidth"))
+                            )
+                            height = float(
+                                current_operation.get("height", getattr(shape, "SizeHeight"))
+                            )
+                            try:
+                                shape.SetSize(width, height)
+                            except Exception:
+                                shape.SizeWidth = width
+                                shape.SizeHeight = height
+                        if "x" in current_operation or "y" in current_operation:
+                            x = float(
+                                current_operation.get(
+                                    "x", getattr(shape, "LeftX", getattr(shape, "PositionX", 0))
+                                )
+                            )
+                            y = float(
+                                current_operation.get(
+                                    "y", getattr(shape, "BottomY", getattr(shape, "PositionY", 0))
+                                )
+                            )
+                            try:
+                                shape.SetPosition(x, y)
+                            except Exception:
+                                shape.PositionX = x
+                                shape.PositionY = y
+                        if "rotation" in current_operation:
+                            shape.RotationAngle = float(current_operation["rotation"])
+                    else:
+                        raise CorelDrawBridgeError(
+                            f"operator object transaction does not support: {op}"
+                        )
+                    results.append(
+                        {"index": current_index, "op": op, "object_id": object_id}
+                    )
+                document.EndCommandGroup()
+                group_ended = True
+            except Exception as exc:
+                end_error = None
+                if group_started and not group_ended:
+                    try:
+                        document.EndCommandGroup()
+                        group_ended = True
+                    except Exception as end_exc:
+                        end_error = str(end_exc)
+                rolled_back = False
+                rollback_error = None
+                if group_started and group_ended:
+                    try:
+                        document.Undo()
+                        rolled_back = True
+                    except Exception as undo_exc:
+                        rollback_error = str(undo_exc)
+                report = {
+                    "status": "rolled_back" if rolled_back else "failed",
+                    "transaction_id": transaction_id,
+                    "name": name,
+                    "completed_operations": len(results),
+                    "failed_index": current_index,
+                    "failed_operation": {
+                        key: value
+                        for key, value in (current_operation or {}).items()
+                        if key not in {"text"}
+                    },
+                    "error": str(exc),
+                    "rolled_back": rolled_back,
+                    "end_group_error": end_error,
+                    "rollback_error": rollback_error,
+                    "results": results,
+                }
+                raise DesignTransactionError(
+                    f"operator object transaction failed at {current_index}: {exc}",
+                    report,
+                ) from exc
+        return {
+            "status": "committed",
+            "transaction_id": transaction_id,
+            "name": name,
+            "operation_count": len(results),
+            "results": results,
+        }
 
     def undo(self) -> None:
         with self.bridge.session() as (_application, document):

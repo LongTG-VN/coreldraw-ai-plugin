@@ -26,7 +26,9 @@ def main() -> int:
     source = Path(str(row["absolute_path"])).resolve()
     token = source_token(source, args.archive_root)
     inspection = CompanyCdrInspector().inspect(source, archive_root=args.archive_root)
-    plan = DeterministicMutationPilotPlanner().plan(inspection, source_token=token)
+    plan = DeterministicMutationPilotPlanner(
+        preferred_mode=str(request.get("planner_mode", "auto"))
+    ).plan(inspection, source_token=token)
     if plan is None:
         result = OperatorExecutionResultV1(
             result=OperatorResultClass.UNSUPPORTED,

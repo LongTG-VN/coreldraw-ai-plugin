@@ -19,6 +19,12 @@ def main() -> int:
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--timeout-seconds", type=float, default=240.0)
+    parser.add_argument("--selection-seed", default="corel-mutation-pilot-v1")
+    parser.add_argument(
+        "--planner-mode",
+        choices=("auto", "font", "replace", "move", "resize"),
+        default="auto",
+    )
     parser.add_argument("--read-only-source", action="store_true", required=True)
     args = parser.parse_args()
     inventory = ArchiveDatabase(args.inventory)
@@ -26,12 +32,16 @@ def main() -> int:
     inventory_by_id = {str(row["file_id"]): row for row in inventory_rows}
     census = OperatorStateDatabase(args.census_state)
     selected = select_mutation_pilot_rows(
-        census.census_rows(), inventory_by_id, limit=args.limit
+        census.census_rows(),
+        inventory_by_id,
+        limit=args.limit,
+        seed=args.selection_seed,
     )
     runner = MutationPilotRunner(
         archive_root=args.archive_root,
         workspace=args.workspace,
         timeout_seconds=args.timeout_seconds,
+        planner_mode=args.planner_mode,
     )
     summary = runner.run(selected)
     print(json.dumps(summary, indent=2))

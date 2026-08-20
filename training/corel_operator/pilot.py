@@ -51,12 +51,14 @@ class MutationPilotRunner:
         workspace: Path,
         timeout_seconds: float = 240.0,
         max_attempts: int = 2,
+        planner_mode: str = "auto",
     ) -> None:
         self.archive_root = archive_root.resolve()
         self.workspace = workspace.resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.timeout_seconds = timeout_seconds
         self.max_attempts = max_attempts
+        self.planner_mode = planner_mode
         self.state = OperatorStateDatabase(self.workspace / "mutation_pilot.sqlite")
         self.runtime = CorelOperatorRuntime()
         self.run_id = "real-mutation-pilot-001"
@@ -108,7 +110,14 @@ class MutationPilotRunner:
         request_path = worker_root / f"{stem}.request.json"
         response_path = worker_root / f"{stem}.response.json"
         request_path.write_text(
-            json.dumps({"row": row, "attempt": attempt}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "row": row,
+                    "attempt": attempt,
+                    "planner_mode": self.planner_mode,
+                },
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
         if response_path.exists():
