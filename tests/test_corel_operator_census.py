@@ -99,3 +99,55 @@ def test_isolated_census_timeout_is_persistable_and_recovers(
     assert result["error_category"] == "TIMEOUT"
     assert result["source_unchanged"] is True
     assert recovery.closed is True
+
+
+def test_retry_failures_reprocesses_only_when_explicit(tmp_path: Path) -> None:
+    archive = tmp_path / "archive"
+    workspace = tmp_path / "workspace"
+    archive.mkdir()
+    source = archive / "one.cdr"
+    source.write_bytes(b"source")
+    runner = OperatorCensusRunner(archive_root=archive, workspace=workspace)
+    row = {
+        "file_id": "file:" + "b" * 32,
+        "absolute_path": str(source),
+        "size_bytes": source.stat().st_size,
+        "cdr_candidate": True,
+    }
+    from training.corel_operator.policy import source_token
+
+    token = source_token(source, archive)
+    runner.state.put_census(
+        token,
+        str(row["file_id"]),
+        "FAILED",
+        {
+            "source_token": token,
+            "status": "FAILED",
+            "checks": {},
+            "counts": {},
+            "timings_ms": {"total": 1.0},
+            "source_unchanged": True,
+            "operator_eligible": False,
+            "error_category": "TIMEOUT",
+        },
+    )
+    calls: list[str] = []
+
+    def complete(value, *, timeout_seconds):
+        calls.append(value["file_id"])
+        return {
+            "source_token": token,
+            "status": "COMPLETE",
+            "checks": {},
+            "counts": {},
+            "timings_ms": {"total": 1.0},
+            "source_unchanged": True,
+            "operator_eligible": True,
+        }
+
+    runner._run_one_isolated = complete  # type: ignore[method-assign]
+    runner.run_isolated([row], timeout_seconds=10, retry_failures=False)
+    assert calls == []
+    runner.run_isolated([row], timeout_seconds=10, retry_failures=True)
+    assert calls == [row["file_id"]]

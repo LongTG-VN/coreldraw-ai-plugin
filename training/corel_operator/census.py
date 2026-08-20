@@ -220,12 +220,15 @@ class OperatorCensusRunner:
         rows: list[dict[str, Any]],
         *,
         timeout_seconds: float = 180.0,
+        retry_failures: bool = False,
     ) -> dict[str, Any]:
         """Run each CDR in a killable worker while persisting every outcome."""
 
         if timeout_seconds < 10:
             raise ValueError("census timeout must be at least 10 seconds")
-        completed = self.state.census_tokens(statuses=("COMPLETE", "FAILED"))
+        completed = self.state.census_tokens(
+            statuses=("COMPLETE",) if retry_failures else ("COMPLETE", "FAILED")
+        )
         total = len(rows)
         for index, row in enumerate(rows, start=1):
             token = source_token(Path(str(row["absolute_path"])), self.archive_root)
