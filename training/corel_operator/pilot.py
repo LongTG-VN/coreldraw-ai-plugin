@@ -8,7 +8,9 @@ import json
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from training.company_archive.safety import assert_source_unchanged, source_stat_guard
@@ -190,6 +192,26 @@ class MutationPilotRunner:
     def write_reports(self, *, expected_count: int) -> dict[str, Any]:
         rows = self.state.batch_rows(self.run_id)
         payloads = [row["result"] for row in rows]
+        elapsed = sorted(
+            float(item["elapsed_seconds"])
+            for item in payloads
+            if item.get("elapsed_seconds") is not None
+        )
+        operation_modes = Counter(
+            str(item.get("metadata", {}).get("planner", {}).get("operation_mode"))
+            for item in payloads
+            if item.get("metadata", {}).get("planner", {}).get("operation_mode")
+        )
+        visual_statuses = Counter(
+            str(item.get("metadata", {}).get("visual_qa", {}).get("status"))
+            for item in payloads
+            if item.get("metadata", {}).get("visual_qa", {}).get("status")
+        )
+        p95 = (
+            elapsed[max(0, min(len(elapsed) - 1, int(len(elapsed) * 0.95 + 0.999) - 1))]
+            if elapsed
+            else None
+        )
         summary = {
             "run_id": self.run_id,
             "expected_count": expected_count,
@@ -220,6 +242,11 @@ class MutationPilotRunner:
             "editable_reopen_verified": sum(
                 bool(item.get("editability_verified")) for item in payloads
             ),
+            "visual_qa_pass": visual_statuses.get("PASS", 0),
+            "visual_qa_needs_review": visual_statuses.get("NEEDS_REVIEW", 0),
+            "operation_modes": dict(sorted(operation_modes.items())),
+            "median_seconds": median(elapsed) if elapsed else None,
+            "p95_seconds": p95,
         }
         (self.workspace / "mutation_pilot_summary.json").write_text(
             json.dumps(summary, indent=2), encoding="utf-8"
@@ -237,6 +264,9 @@ class MutationPilotRunner:
                     "object_count_after",
                     "editability_verified",
                     "source_unchanged",
+                    "visual_qa_status",
+                    "operation_mode",
+                    "elapsed_seconds",
                     "error_code",
                 ]
             )
@@ -250,6 +280,9 @@ class MutationPilotRunner:
                         item.get("object_count_after"),
                         item.get("editability_verified"),
                         item.get("source_unchanged"),
+                        item.get("metadata", {}).get("visual_qa", {}).get("status") or "",
+                        item.get("metadata", {}).get("planner", {}).get("operation_mode") or "",
+                        item.get("elapsed_seconds"),
                         item.get("error_code") or "",
                     ]
                 )

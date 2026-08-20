@@ -18,6 +18,7 @@ from training.corel_operator.agent import (
 from training.corel_operator.capabilities import inspect_operator_capabilities
 from training.corel_operator.mcp_server import create_mcp_server
 from training.corel_operator.models import OperatorExecutionResultV1, OperatorResultClass
+from training.corel_operator.pilot import MutationPilotRunner
 from training.corel_operator.tools import OperatorToolError, OperatorToolService
 from training.corel_operator.visual_qa import compare_operator_previews
 
@@ -292,3 +293,53 @@ def test_mcp_exposes_only_bounded_tools_and_requires_confirmation(tmp_path: Path
 def test_mcp_rejects_non_loopback_binding(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="loopback"):
         create_mcp_server(_tool_service(tmp_path), host="0.0.0.0")
+
+
+def test_mutation_scale_summary_tracks_visual_qa_operations_and_latency(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "archive"
+    workspace = tmp_path / "workspace"
+    archive.mkdir()
+    runner = MutationPilotRunner(archive_root=archive, workspace=workspace)
+    runner.state.put_batch(
+        runner.run_id,
+        "source:one",
+        "COMPLETE",
+        {
+            "result": "AUTO_SUCCESS",
+            "source_token": "source:one",
+            "source_unchanged": True,
+            "editability_verified": True,
+            "elapsed_seconds": 10.0,
+            "metadata": {
+                "planner": {"operation_mode": "move_1mm"},
+                "visual_qa": {"status": "PASS"},
+            },
+        },
+    )
+    runner.state.put_batch(
+        runner.run_id,
+        "source:two",
+        "NEEDS_REVIEW",
+        {
+            "result": "NEEDS_REVIEW",
+            "source_token": "source:two",
+            "source_unchanged": True,
+            "editability_verified": True,
+            "elapsed_seconds": 20.0,
+            "metadata": {
+                "planner": {"operation_mode": "font_size_plus_5_percent"},
+                "visual_qa": {"status": "NEEDS_REVIEW"},
+            },
+        },
+    )
+    summary = runner.write_reports(expected_count=2)
+    assert summary["visual_qa_pass"] == 1
+    assert summary["visual_qa_needs_review"] == 1
+    assert summary["operation_modes"] == {
+        "font_size_plus_5_percent": 1,
+        "move_1mm": 1,
+    }
+    assert summary["median_seconds"] == 15.0
+    assert summary["p95_seconds"] == 20.0

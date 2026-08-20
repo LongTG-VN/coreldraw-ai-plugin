@@ -11,6 +11,7 @@ from training.corel_operator.models import OperatorExecutionResultV1, OperatorRe
 from training.corel_operator.planner import DeterministicMutationPilotPlanner
 from training.corel_operator.policy import source_token
 from training.corel_operator.service import SafeCorelOperator
+from training.corel_operator.visual_qa import compare_operator_previews
 
 
 def main() -> int:
@@ -52,6 +53,20 @@ def main() -> int:
             plan=plan,
         )
         result.metadata["planner"] = plan.metadata
+        if (
+            result.result == OperatorResultClass.AUTO_SUCCESS
+            and result.preview_before
+            and result.preview_after
+        ):
+            visual_qa = compare_operator_previews(
+                Path(result.preview_before),
+                Path(result.preview_after),
+                workspace=args.workspace,
+            )
+            result.metadata["visual_qa"] = visual_qa.model_dump(mode="json")
+            if visual_qa.status == "NEEDS_REVIEW":
+                result.result = OperatorResultClass.NEEDS_REVIEW
+                result.warnings.extend(visual_qa.issues)
     args.response.write_text(
         json.dumps(result.model_dump(mode="json"), ensure_ascii=False),
         encoding="utf-8",
