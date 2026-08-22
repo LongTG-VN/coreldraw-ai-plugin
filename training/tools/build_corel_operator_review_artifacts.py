@@ -19,12 +19,17 @@ def main() -> int:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--run-id", default="real-mutation-pilot-001")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--artifact-name",
+        default="chatgpt-corel-operator-mutation-pilot-001",
+    )
     args = parser.parse_args()
     state = OperatorStateDatabase(args.state)
     summary = build_mutation_review_artifacts(
         pilot_workspace=args.pilot_workspace,
         output_root=args.output,
         state_rows=state.batch_rows(args.run_id),
+        artifact_name=args.artifact_name,
     )
     validation = validate_private_artifact(args.output)
     result = {**summary, "validation": validation}

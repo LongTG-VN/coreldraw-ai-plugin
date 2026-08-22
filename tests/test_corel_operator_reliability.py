@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from training.company_archive.models import CdrInspectionV1, CdrObjectV1
 from training.corel_operator.reliability import (
+    classify_failure_replay,
     classify_visual_qa_reevaluation,
     replay_plan_from_previous_result,
 )
@@ -144,3 +145,11 @@ def test_reevaluation_classification_never_upgrades_review_or_failure() -> None:
     assert classify_visual_qa_reevaluation(
         {"result": "NEEDS_REVIEW", "error_code": "CANONICAL_EXPORT_FAILED"}
     ) == "QA_EVIDENCE_INSUFFICIENT"
+
+
+def test_failure_replay_classification_keeps_uncertain_results_separate() -> None:
+    assert classify_failure_replay({"result": "AUTO_SUCCESS"}) == "FIXED"
+    assert classify_failure_replay({"result": "SUCCESS_WITH_WARNING"}) == "FIXED"
+    assert classify_failure_replay({"result": "NEEDS_REVIEW"}) == "NEEDS_REVIEW"
+    assert classify_failure_replay({"result": "UNSUPPORTED"}) == "NOT_REPLAYABLE"
+    assert classify_failure_replay({"result": "FAILED"}) == "FAILED"

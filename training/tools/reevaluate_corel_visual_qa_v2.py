@@ -23,7 +23,7 @@ from training.corel_operator.state import OperatorStateDatabase
 RUN_ID = "visual-qa-v2-reevaluation-001"
 
 
-def _execute(
+def execute_previous_result_replay(
     *,
     row: dict,
     previous_result: dict,
@@ -166,7 +166,7 @@ def main() -> int:
         else:
             result = {}
             for attempt in range(1, args.max_attempts + 1):
-                result = _execute(
+                result = execute_previous_result_replay(
                     row=row,
                     previous_result=by_token[token],
                     archive_root=archive_root,

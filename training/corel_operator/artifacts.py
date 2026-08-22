@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -44,8 +44,9 @@ def build_mutation_review_artifacts(
     pilot_workspace: Path,
     output_root: Path,
     state_rows: list[dict[str, Any]],
+    artifact_name: str = "chatgpt-corel-operator-mutation-pilot-001",
 ) -> dict[str, Any]:
-    """Build same-scale before/after sheets without copying CDRs or paths."""
+    """Build same-scale before/after/diff sheets without CDRs or paths."""
 
     workspace = pilot_workspace.resolve()
     output = output_root.resolve()
@@ -67,13 +68,31 @@ def build_mutation_review_artifacts(
         operator_id = f"OP_{index:04d}"
         with Image.open(before) as before_image, Image.open(after) as after_image:
             panel_w, panel_h, header = 900, 900, 70
-            canvas = Image.new("RGB", (panel_w * 2, panel_h + header), "#e8e8e8")
-            canvas.paste(_fit(before_image, panel_w, panel_h), (0, header))
-            canvas.paste(_fit(after_image, panel_w, panel_h), (panel_w, header))
+            before_panel = _fit(before_image, panel_w, panel_h)
+            after_panel = _fit(after_image, panel_w, panel_h)
+            difference = ImageChops.difference(before_panel, after_panel).convert("L")
+            diff_panel = ImageOps.colorize(
+                ImageOps.autocontrast(difference),
+                black="white",
+                white="#d00000",
+            )
+            canvas = Image.new("RGB", (panel_w * 3, panel_h + header), "#e8e8e8")
+            canvas.paste(before_panel, (0, header))
+            canvas.paste(after_panel, (panel_w, header))
+            canvas.paste(diff_panel, (panel_w * 2, header))
             draw = ImageDraw.Draw(canvas)
             title_font = _font(28)
-            draw.text((20, 18), f"{operator_id}  BEFORE", fill="black", font=title_font)
+            operation = str(
+                result.get("metadata", {}).get("planner", {}).get("operation_mode", "")
+            )
+            draw.text(
+                (20, 18),
+                f"{operator_id}  {operation or 'OPERATION'}  BEFORE",
+                fill="black",
+                font=title_font,
+            )
             draw.text((panel_w + 20, 18), "AFTER", fill="black", font=title_font)
+            draw.text((panel_w * 2 + 20, 18), "DIFF", fill="black", font=title_font)
             comparison_path = comparisons / f"{operator_id}.jpg"
             canvas.save(comparison_path, quality=94, subsampling=0)
         comparison_paths.append(comparison_path)
@@ -83,6 +102,7 @@ def build_mutation_review_artifacts(
                 "source_token": result["source_token"],
                 "comparison_file": f"comparisons/{comparison_path.name}",
                 "result": result["result"],
+                "operation": operation,
                 "object_count_before": result.get("object_count_before"),
                 "object_count_after": result.get("object_count_after"),
                 "editability_verified": bool(result.get("editability_verified")),
@@ -90,11 +110,16 @@ def build_mutation_review_artifacts(
                 "visual_qa_status": result.get("metadata", {})
                 .get("visual_qa", {})
                 .get("status", ""),
-                "visual_qa_issues": "|".join(
+                "visual_qa_reasons": "|".join(
                     str(issue)
                     for issue in result.get("metadata", {})
                     .get("visual_qa", {})
-                    .get("issues", [])
+                    .get(
+                        "reasons",
+                        result.get("metadata", {})
+                        .get("visual_qa", {})
+                        .get("issues", []),
+                    )
                 ),
             }
         )
@@ -103,7 +128,7 @@ def build_mutation_review_artifacts(
     per_sheet = 4
     for sheet_index, start in enumerate(range(0, len(comparison_paths), per_sheet), start=1):
         group = comparison_paths[start : start + per_sheet]
-        sheet = Image.new("RGB", (1800, len(group) * 970), "#303030")
+        sheet = Image.new("RGB", (2700, len(group) * 970), "#303030")
         for row_index, comparison_path in enumerate(group):
             with Image.open(comparison_path) as comparison:
                 sheet.paste(comparison.convert("RGB"), (0, row_index * 970))
@@ -117,19 +142,20 @@ def build_mutation_review_artifacts(
         "source_token",
         "comparison_file",
         "result",
+        "operation",
         "object_count_before",
         "object_count_after",
         "editability_verified",
         "source_unchanged",
         "visual_qa_status",
-        "visual_qa_issues",
+        "visual_qa_reasons",
     ]
     with manifest.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(manifest_rows)
     summary = {
-        "artifact_name": "chatgpt-corel-operator-mutation-pilot-001",
+        "artifact_name": artifact_name,
         "comparison_count": len(comparison_paths),
         "auto_success_comparison_count": sum(
             row["result"] in {"AUTO_SUCCESS", "SUCCESS_WITH_WARNING"}

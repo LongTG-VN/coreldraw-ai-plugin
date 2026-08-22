@@ -40,6 +40,8 @@ def test_mutation_review_artifact_is_sanitized(tmp_path: Path) -> None:
     assert summary["comparison_count"] == 1
     assert (output / "comparisons" / "OP_0001.jpg").is_file()
     assert (output / "contact_sheets" / "contact_sheet_001.jpg").is_file()
+    with Image.open(output / "comparisons" / "OP_0001.jpg") as comparison:
+        assert comparison.size == (2700, 970)
     validation = validate_private_artifact(output)
     assert validation["forbidden_binary_count"] == 0
     assert validation["path_leak_count"] == 0

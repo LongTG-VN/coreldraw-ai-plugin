@@ -131,7 +131,21 @@ def classify_visual_qa_reevaluation(result: dict[str, Any]) -> str:
     return "QA_EVIDENCE_INSUFFICIENT"
 
 
+def classify_failure_replay(result: dict[str, Any]) -> str:
+    """Classify an exact replay of one previously failed deterministic task."""
+
+    result_class = str(result.get("result", ""))
+    if result_class in {"AUTO_SUCCESS", "SUCCESS_WITH_WARNING"}:
+        return "FIXED"
+    if result_class == "NEEDS_REVIEW":
+        return "NEEDS_REVIEW"
+    if result_class == "UNSUPPORTED":
+        return "NOT_REPLAYABLE"
+    return "FAILED"
+
+
 __all__ = [
     "classify_visual_qa_reevaluation",
+    "classify_failure_replay",
     "replay_plan_from_previous_result",
 ]
