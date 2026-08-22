@@ -114,6 +114,27 @@ _PHONE = re.compile(r"(?<!\d)(?:\+?84|0)(?:[ .-]?\d){8,10}(?!\d)")
 _PRICE = re.compile(r"(?i)(?<!\w)\d+(?:[., ]\d{3})*(?:\s?)(?:k|đ|₫|vnd)(?!\w)")
 
 
+def _replace_digits_in_match(text: str, match: re.Match[str]) -> str:
+    """Create explicit benchmark copy without changing length or separators."""
+
+    output = list(text)
+    for index in range(match.start(), match.end()):
+        if output[index].isdigit():
+            output[index] = str((int(output[index]) + 1) % 10)
+    return "".join(output)
+
+
+def _same_length_benchmark_text(text: str) -> str:
+    """Replace letters only, preserving layout-significant whitespace/punctuation."""
+
+    return "".join(
+        ("Y" if character.casefold() == "x" else "X")
+        if character.isalpha()
+        else character
+        for character in text
+    )
+
+
 class DeterministicMutationPilotPlanner:
     """Diversify safe mechanical edits without making aesthetic decisions."""
 
@@ -169,12 +190,18 @@ class DeterministicMutationPilotPlanner:
                 for item in candidates
                 if item.object_type == "text"
                 and item.text
+                and item.font_family
                 and (_PHONE.search(item.text) or _PRICE.search(item.text))
             ]
             if replaceable:
                 chosen = sorted(replaceable, key=lambda item: item.object_id)[0]
-                is_phone = bool(_PHONE.search(chosen.text or ""))
-                replacement = "0900 000 000" if is_phone else "99K"
+                source_text = chosen.text or ""
+                phone_match = _PHONE.search(source_text)
+                price_match = _PRICE.search(source_text)
+                matched = phone_match or price_match
+                assert matched is not None
+                is_phone = phone_match is not None
+                replacement = _replace_digits_in_match(source_text, matched)
                 return MutationPlanV1(
                     plan_id=plan_id,
                     intent="verify explicit benchmark text replacement on a working copy",
@@ -198,6 +225,8 @@ class DeterministicMutationPilotPlanner:
                         "operation_mode": "replace_phone" if is_phone else "replace_price",
                         "benchmark_sample_data": True,
                         "customer_content_changed_on_working_copy": True,
+                        "replacement_scope": "matched_substring",
+                        "replacement_length_preserved": True,
                     },
                 )
             if self.preferred_mode == "replace":
@@ -217,6 +246,7 @@ class DeterministicMutationPilotPlanner:
                     # conventional editable-text profile; exact postconditions
                     # still fail closed and roll back any silent no-op.
                     and any(character.isalpha() for character in item.text or "")
+                    and item.font_family
                     and item.font_size is not None
                     and 3.0 <= float(item.font_size) <= 36.0
                     and text_counts[(item.text or "").strip().casefold()] == 1
@@ -239,7 +269,7 @@ class DeterministicMutationPilotPlanner:
                                 value=chosen.object_id,
                                 object_type="text",
                             ),
-                            value="BENCHMARK TEST",
+                            value=_same_length_benchmark_text(chosen.text or ""),
                             precondition_object_type="text",
                             dependencies=_container_dependency(chosen),
                         )
@@ -250,6 +280,8 @@ class DeterministicMutationPilotPlanner:
                         "operation_mode": "replace_benchmark_text",
                         "benchmark_sample_data": True,
                         "customer_content_changed_on_working_copy": True,
+                        "replacement_scope": "alphabetic_characters",
+                        "replacement_length_preserved": True,
                     },
                 )
 

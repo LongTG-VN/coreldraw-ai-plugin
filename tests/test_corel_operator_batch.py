@@ -110,7 +110,10 @@ def test_mutation_pilot_planner_marks_benchmark_phone_replacement() -> None:
     assert plan is not None
     assert plan.metadata["benchmark_sample_data"] is True
     assert plan.metadata["customer_content_changed_on_working_copy"] is True
-    assert plan.actions[0].value == "0900 000 000"
+    assert plan.actions[0].value == "1012 345 678"
+    assert len(str(plan.actions[0].value)) == len("0901 234 567")
+    assert plan.metadata["replacement_scope"] == "matched_substring"
+    assert plan.metadata["replacement_length_preserved"] is True
 
 
 def test_targeted_replace_uses_explicit_benchmark_copy_for_unique_text() -> None:
@@ -118,7 +121,8 @@ def test_targeted_replace_uses_explicit_benchmark_copy_for_unique_text() -> None
         _inspection(), source_token="source:fixture"
     )
     assert plan is not None
-    assert plan.actions[0].value == "BENCHMARK TEST"
+    assert plan.actions[0].value == "XXXXXXXX XXYX"
+    assert len(str(plan.actions[0].value)) == len("Customer text")
     assert plan.metadata["operation_mode"] == "replace_benchmark_text"
     assert plan.metadata["benchmark_sample_data"] is True
 
@@ -132,6 +136,19 @@ def test_targeted_replace_rejects_numeric_legacy_display_text() -> None:
         DeterministicMutationPilotPlanner(preferred_mode="replace").plan(
             inspection,
             source_token="source:numeric-display",
+        )
+        is None
+    )
+
+
+def test_targeted_replace_rejects_text_without_one_stable_font() -> None:
+    inspection = _inspection()
+    inspection.objects[0].font_family = None
+
+    assert (
+        DeterministicMutationPilotPlanner(preferred_mode="replace").plan(
+            inspection,
+            source_token="source:mixed-font",
         )
         is None
     )

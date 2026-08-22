@@ -300,7 +300,22 @@ class CorelOperatorRuntime:
         except Exception as exc:
             raise CorelDrawBridgeError("operator target is not editable text") from exc
         if "text" in operation:
-            story.Text = str(operation["text"])
+            replacement = str(operation["text"])
+            replace_wide = getattr(story, "ReplaceWide", None)
+            if callable(replace_wide):
+                # Replace the existing object-local range so Corel can retain
+                # its character formatting.  Exact text/style postconditions
+                # still catch legacy TextRange methods that silently no-op or
+                # alter formatting, and the transaction then rolls back.
+                original_font = getattr(story, "Font", None)
+                if isinstance(original_font, str) and original_font.strip():
+                    replace_wide(replacement, 0, -1, original_font)
+                else:
+                    replace_wide(replacement)
+            else:
+                # Older/fake automation objects may expose only the Text
+                # property.  This remains covered by the same postconditions.
+                story.Text = replacement
         if "font_name" in operation:
             story.Font = str(operation["font_name"])
         if "font_size" in operation:

@@ -17,6 +17,42 @@ from training.corel_operator.state import OperatorStateDatabase
 BALANCED_OPERATION_MODES = ("replace", "move", "resize", "multi")
 
 
+def select_targeted_rows(
+    census_rows: list[dict[str, Any]],
+    inventory_by_file_id: dict[str, dict[str, Any]],
+    *,
+    operation_mode: str,
+    limit: int,
+    seed: str,
+) -> list[dict[str, Any]]:
+    """Select a reproducible affected-case cohort before execution begins."""
+
+    if operation_mode not in BALANCED_OPERATION_MODES:
+        raise ValueError("unsupported targeted operation mode")
+    if limit < 1:
+        raise ValueError("targeted pilot limit must be positive")
+    eligible: list[dict[str, Any]] = []
+    for state_row in census_rows:
+        result = state_row["result"]
+        counts = result.get("counts", {})
+        inventory = inventory_by_file_id.get(str(state_row["file_id"]))
+        if (
+            inventory is None
+            or not bool(result.get("operator_eligible"))
+            or int(counts.get("objects", 0)) <= int(counts.get("pasteboard", 0))
+        ):
+            continue
+        if operation_mode == "replace" and int(counts.get("text", 0)) < 1:
+            continue
+        eligible.append(inventory)
+    return sorted(
+        eligible,
+        key=lambda row: hashlib.sha256(
+            f"{seed}:{operation_mode}:{row['file_id']}".encode("utf-8")
+        ).hexdigest(),
+    )[:limit]
+
+
 def select_balanced_rows(
     census_rows: list[dict[str, Any]],
     inventory_by_file_id: dict[str, dict[str, Any]],
@@ -187,5 +223,6 @@ __all__ = [
     "BALANCED_OPERATION_MODES",
     "run_balanced_pilot",
     "select_balanced_rows",
+    "select_targeted_rows",
     "summarize_balanced_results",
 ]

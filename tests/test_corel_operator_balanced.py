@@ -3,6 +3,7 @@ from __future__ import annotations
 from training.corel_operator.balanced import (
     BALANCED_OPERATION_MODES,
     select_balanced_rows,
+    select_targeted_rows,
     summarize_balanced_results,
 )
 
@@ -84,3 +85,34 @@ def test_balanced_summary_keeps_unsupported_and_failure_separate() -> None:
     assert summary["save_reopen_fail"] == 0
     assert summary["p90_seconds"] == 3.0
     assert summary["source_mutations"] == 0
+
+
+def test_targeted_replace_selection_requires_real_text_candidates() -> None:
+    inventory = {
+        f"file-{index}": {"file_id": f"file-{index}", "absolute_path": f"{index}.cdr"}
+        for index in range(4)
+    }
+    census = [
+        {
+            "file_id": f"file-{index}",
+            "result": {
+                "operator_eligible": True,
+                "counts": {
+                    "objects": 5,
+                    "pasteboard": 1,
+                    "text": 1 if index in {1, 3} else 0,
+                },
+            },
+        }
+        for index in range(4)
+    ]
+
+    selected = select_targeted_rows(
+        census,
+        inventory,
+        operation_mode="replace",
+        limit=4,
+        seed="fixture",
+    )
+
+    assert {row["file_id"] for row in selected} == {"file-1", "file-3"}

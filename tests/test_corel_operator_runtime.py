@@ -15,6 +15,12 @@ class Story:
         self.Text = "old"
         self.Font = "Arial"
         self.Size = 10.0
+        self.replace_wide_args = None
+
+    def ReplaceWide(self, value: str, language_id=0, charset=-1, font=None):
+        self.replace_wide_args = (value, language_id, charset, font)
+        self.Text = value
+        return self
 
 
 class Text:
@@ -131,6 +137,29 @@ def test_object_transaction_targets_unnamed_shape_by_stable_id() -> None:
     assert result["status"] == "committed"
     assert shape.Text.Story.Size == 11.0
     assert document.started == document.ended == 1
+
+
+def test_text_replacement_prefers_object_local_replacewide_and_preserves_font() -> None:
+    runtime, shape, document = _runtime()
+    shape.Text.Story.Font = "Fixture Font"
+
+    result = runtime.execute_transaction(
+        [
+            {
+                "op": "typography",
+                "shape_name": "unused",
+                "operator_object_id": "object_1",
+                "text": "new",
+            }
+        ],
+        name="replacewide-test",
+    )
+
+    assert result["status"] == "committed"
+    assert shape.Text.Story.Text == "new"
+    assert shape.Text.Story.Font == "Fixture Font"
+    assert shape.Text.Story.replace_wide_args == ("new", 0, -1, "Fixture Font")
+    assert document.undo_count == 0
 
 
 def test_object_transaction_rolls_back_when_later_id_is_missing() -> None:
