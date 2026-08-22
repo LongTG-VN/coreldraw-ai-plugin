@@ -67,6 +67,8 @@ def _page_geometry(inspection: CdrInspectionV1) -> dict[str, float | str | int]:
     return {
         "width": inspection.page_width,
         "height": inspection.page_height,
+        "left": inspection.page_left,
+        "bottom": inspection.page_bottom,
         "unit": inspection.unit,
         "unit_code": inspection.corel_unit_code,
         "page_count": inspection.page_count,

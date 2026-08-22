@@ -106,6 +106,34 @@ def _safe_name(value: str, index: int) -> str:
     return cleaned[:160]
 
 
+def _unique_id(base: str, used: set[str]) -> str:
+    object_id = base
+    suffix = 2
+    while object_id in used:
+        object_id = f"{base}_{suffix}"
+        suffix += 1
+    used.add(object_id)
+    return object_id
+
+
+def _shape_ids(
+    shape: Any,
+    *,
+    index: int,
+    used_ids: set[str],
+    used_legacy_ids: set[str] | None = None,
+) -> tuple[str, str, int | None]:
+    raw_name = str(getattr(shape, "Name", "") or f"object_{index}")
+    legacy_ids = used_legacy_ids if used_legacy_ids is not None else set()
+    legacy_id = _unique_id(_safe_name(raw_name, index), legacy_ids)
+    try:
+        static_id = int(getattr(shape, "StaticID", 0) or 0)
+    except Exception:
+        static_id = 0
+    base = f"static_{static_id}" if static_id > 0 else legacy_id
+    return _unique_id(base, used_ids), legacy_id, static_id or None
+
+
 def _shape_text(shape: Any) -> tuple[str | None, str | None, float | None, str | None]:
     try:
         story = shape.Text.Story
@@ -157,6 +185,8 @@ def _bounded_bbox(
     shape_height: float,
     page_width: float,
     page_height: float,
+    page_left: float = 0.0,
+    page_bottom: float = 0.0,
 ) -> tuple[dict[str, float], dict[str, float], bool]:
     """Clamp off-page Corel geometry and retain the unclipped source evidence."""
 
@@ -166,8 +196,9 @@ def _bounded_bbox(
         "width": shape_width,
         "height": shape_height,
     }
-    raw_top = page_height - bottom - shape_height
-    bounded_left = min(max(0.0, left), max(0.0, page_width - 1e-9))
+    page_relative_left = left - page_left
+    raw_top = page_bottom + page_height - bottom - shape_height
+    bounded_left = min(max(0.0, page_relative_left), max(0.0, page_width - 1e-9))
     bounded_top = min(max(0.0, raw_top), max(0.0, page_height - 1e-9))
     bounded_width = max(1e-9, min(shape_width, page_width - bounded_left))
     bounded_height = max(1e-9, min(shape_height, page_height - bounded_top))
@@ -178,7 +209,7 @@ def _bounded_bbox(
         "height": bounded_height,
     }
     clipped = (
-        abs(bounded_left - left) > 1e-9
+        abs(bounded_left - page_relative_left) > 1e-9
         or abs(bounded_top - raw_top) > 1e-9
         or abs(bounded_width - shape_width) > 1e-9
         or abs(bounded_height - shape_height) > 1e-9
@@ -303,17 +334,16 @@ class CompanyCdrInspector:
         shape_by_id: dict[str, Any] = {}
         parent_by_id: dict[str, str | None] = {}
         used_object_ids: set[str] = set()
+        used_legacy_ids: set[str] = set()
 
         def visit(shape: Any, *, parent_id: str | None = None) -> None:
             index = len(shape_by_id) + 1
-            raw_name = str(getattr(shape, "Name", "") or f"object_{index}")
-            base_object_id = _safe_name(raw_name, index)
-            object_id = base_object_id
-            suffix = 2
-            while object_id in used_object_ids:
-                object_id = f"{base_object_id}_{suffix}"
-                suffix += 1
-            used_object_ids.add(object_id)
+            object_id, _legacy_id, _static_id = _shape_ids(
+                shape,
+                index=index,
+                used_ids=used_object_ids,
+                used_legacy_ids=used_legacy_ids,
+            )
             shape_by_id[object_id] = shape
             parent_by_id[object_id] = parent_id
             for child in _collection_items(getattr(shape, "Shapes", [])):
@@ -419,9 +449,12 @@ class CompanyCdrInspector:
         page = document.ActivePage
         width = _float(page.SizeWidth)
         height = _float(page.SizeHeight)
+        page_left = _float(getattr(page, "LeftX", 0))
+        page_bottom = _float(getattr(page, "BottomY", 0))
         raw_shapes = list(_collection_items(getattr(page, "Shapes", page.ActiveLayer.Shapes)))
         objects: list[CdrObjectV1] = []
         used_object_ids: set[str] = set()
+        used_legacy_ids: set[str] = set()
         font_families: set[str] = set()
         color_summary: list[dict[str, Any]] = []
         counts = {"text": 0, "image": 0, "group": 0, "vector": 0}
@@ -429,13 +462,12 @@ class CompanyCdrInspector:
         def visit(shape: Any, *, parent_id: str | None = None) -> None:
             index = len(objects) + 1
             raw_name = str(getattr(shape, "Name", "") or f"object_{index}")
-            base_object_id = _safe_name(raw_name, index)
-            object_id = base_object_id
-            suffix = 2
-            while object_id in used_object_ids:
-                object_id = f"{base_object_id}_{suffix}"
-                suffix += 1
-            used_object_ids.add(object_id)
+            object_id, legacy_id, static_id = _shape_ids(
+                shape,
+                index=index,
+                used_ids=used_object_ids,
+                used_legacy_ids=used_legacy_ids,
+            )
             children = list(_collection_items(getattr(shape, "Shapes", [])))
             text, font, font_size, alignment = _shape_text(shape)
             kind = _shape_kind(shape, text, len(children))
@@ -454,6 +486,8 @@ class CompanyCdrInspector:
                 shape_height=shape_height,
                 page_width=width,
                 page_height=height,
+                page_left=page_left,
+                page_bottom=page_bottom,
             )
             fill = _shape_color(shape)
             if fill and fill not in color_summary:
@@ -483,6 +517,8 @@ class CompanyCdrInspector:
                     fill=fill,
                     metadata={
                         "corel_type": int(getattr(shape, "Type", 0) or 0),
+                        "static_id": static_id,
+                        "legacy_object_id": legacy_id,
                         "source_page": 1,
                         "source_layer": str(
                             getattr(getattr(shape, "Layer", None), "Name", "default")
@@ -518,6 +554,8 @@ class CompanyCdrInspector:
             page_count=max(1, len(pages)),
             page_width=width,
             page_height=height,
+            page_left=page_left,
+            page_bottom=page_bottom,
             unit=COREL_UNITS.get(int(getattr(document, "Unit", -1)), "unknown"),
             corel_unit_code=int(getattr(document, "Unit", -1)),
             layer_count=len(layers),

@@ -122,7 +122,14 @@ class DeterministicMutationPilotPlanner:
         *,
         preferred_mode: str = "auto",
     ) -> None:
-        if preferred_mode not in {"auto", "font", "replace", "move", "resize"}:
+        if preferred_mode not in {
+            "auto",
+            "font",
+            "replace",
+            "move",
+            "resize",
+            "multi",
+        }:
             raise ValueError("unsupported pilot operation mode")
         self.font_planner = DeterministicSafePilotPlanner()
         self.preferred_mode = preferred_mode
@@ -150,7 +157,7 @@ class DeterministicMutationPilotPlanner:
         mode = (
             int(hashlib.sha256(source_token.encode("utf-8")).hexdigest()[:2], 16) % 4
             if self.preferred_mode == "auto"
-            else {"font": 0, "replace": 1, "move": 2, "resize": 3}[
+            else {"font": 0, "replace": 1, "move": 2, "resize": 3, "multi": 4}[
                 self.preferred_mode
             ]
         )
@@ -194,7 +201,49 @@ class DeterministicMutationPilotPlanner:
                     },
                 )
             if self.preferred_mode == "replace":
-                return None
+                text_counts: dict[str, int] = {}
+                for item in candidates:
+                    normalized = (item.text or "").strip().casefold()
+                    if item.object_type == "text" and normalized:
+                        text_counts[normalized] = text_counts.get(normalized, 0) + 1
+                benchmarkable = [
+                    item
+                    for item in candidates
+                    if item.object_type == "text"
+                    and (item.text or "").strip()
+                    and text_counts[(item.text or "").strip().casefold()] == 1
+                ]
+                if not benchmarkable:
+                    return None
+                chosen = sorted(
+                    benchmarkable,
+                    key=lambda item: (len((item.text or "").strip()), item.object_id),
+                )[0]
+                return MutationPlanV1(
+                    plan_id=plan_id,
+                    intent="verify one unique text replacement with explicit benchmark copy",
+                    source="deterministic",
+                    actions=[
+                        MutationActionV1(
+                            operation="replace_text",
+                            target=TargetSelectorV1(
+                                kind="object_id",
+                                value=chosen.object_id,
+                                object_type="text",
+                            ),
+                            value="BENCHMARK TEST",
+                            precondition_object_type="text",
+                            dependencies=_container_dependency(chosen),
+                        )
+                    ],
+                    metadata={
+                        "planner": "DeterministicMutationPilotPlanner",
+                        "planner_is_ai": False,
+                        "operation_mode": "replace_benchmark_text",
+                        "benchmark_sample_data": True,
+                        "customer_content_changed_on_working_copy": True,
+                    },
+                )
 
         if mode == 2:
             movable = [
@@ -274,6 +323,60 @@ class DeterministicMutationPilotPlanner:
                 )
             if self.preferred_mode == "resize":
                 return None
+
+        if mode == 4:
+            multi_targets = [
+                item
+                for item in candidates
+                if item.parent_id is None
+                and item.object_type not in {"group", "text"}
+                and item.bbox["width"] > 0
+                and item.bbox["height"] > 0
+                and item.bbox["x"] + item.bbox["width"] * 1.01 + 1
+                <= inspection.page_width
+                and item.bbox["y"] + item.bbox["height"] * 1.01 + 1
+                <= inspection.page_height
+            ]
+            if multi_targets:
+                chosen = sorted(multi_targets, key=lambda item: item.object_id)[0]
+                selector = TargetSelectorV1(
+                    kind="object_id",
+                    value=chosen.object_id,
+                    object_type=chosen.object_type,
+                )
+                return MutationPlanV1(
+                    plan_id=plan_id,
+                    intent="verify one bounded move and resize in one transaction",
+                    source="deterministic",
+                    actions=[
+                        MutationActionV1(
+                            operation="move",
+                            target=selector,
+                            value={
+                                "x": chosen.bbox["x"] + 1,
+                                "y": chosen.bbox["y"] + 1,
+                            },
+                            precondition_object_type=chosen.object_type,
+                        ),
+                        MutationActionV1(
+                            operation="resize",
+                            target=selector,
+                            value={
+                                "width": round(chosen.bbox["width"] * 1.01, 6),
+                                "height": round(chosen.bbox["height"] * 1.01, 6),
+                            },
+                            precondition_object_type=chosen.object_type,
+                        ),
+                    ],
+                    metadata={
+                        "planner": "DeterministicMutationPilotPlanner",
+                        "planner_is_ai": False,
+                        "operation_mode": "multi_move_resize",
+                        "customer_content_changed_on_working_copy": False,
+                        "single_transaction_required": True,
+                    },
+                )
+            return None
 
         fallback = self.font_planner.plan(inspection, source_token=source_token)
         if fallback is not None:

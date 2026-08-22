@@ -28,6 +28,7 @@ from transaction_engine import DesignTransactionEngine, DesignTransactionError
 class OperatorRuntime(Protocol):
     def create_working_copy(self, source: Path, target: Path) -> None: ...
     def open(self, path: Path) -> None: ...
+    def ensure_stable_object_ids(self, requested_ids: list[str]) -> dict[str, str]: ...
     def snapshot(self, path: Path) -> CdrInspectionV1: ...
     def execute_transaction(self, operations: list[dict[str, Any]], *, name: str) -> dict[str, Any]: ...
     def undo(self) -> None: ...
@@ -43,6 +44,10 @@ class OperatorRuntime(Protocol):
         max_pixels: int,
     ) -> CanonicalExportEvidenceV1: ...
     def export_pdf(self, path: Path) -> Path: ...
+
+
+class CanonicalExportError(CorelDrawBridgeError):
+    """Raised when Corel cannot prove a page-anchored comparison export."""
 
 
 class CorelOperatorRuntime:
@@ -86,6 +91,48 @@ class CorelOperatorRuntime:
 
     def open(self, path: Path) -> None:
         self.bridge.open_document(str(path))
+
+    def ensure_stable_object_ids(self, requested_ids: list[str]) -> dict[str, str]:
+        """Name ambiguous requested objects so their IDs survive COM traversals."""
+
+        with self.bridge.session() as (_application, document):
+            shape_by_id, _parent_by_id = self.inspector._shape_map(document)
+            raw_names = [str(getattr(shape, "Name", "") or "") for shape in shape_by_id.values()]
+            counts: dict[str, int] = {}
+            for name in raw_names:
+                if name:
+                    counts[name] = counts.get(name, 0) + 1
+            reserved = {name for name in raw_names if name}
+            aliases: dict[str, str] = {}
+            for index, (old_id, shape) in enumerate(shape_by_id.items(), start=1):
+                if old_id not in requested_ids:
+                    continue
+                if old_id.startswith("static_"):
+                    aliases[old_id] = old_id
+                    continue
+                raw_name = str(getattr(shape, "Name", "") or "")
+                if raw_name and counts.get(raw_name, 0) == 1:
+                    aliases[old_id] = old_id
+                    continue
+                candidate_index = index
+                candidate = f"codex_operator_{candidate_index:06d}"
+                while candidate in reserved:
+                    candidate_index += len(shape_by_id)
+                    candidate = f"codex_operator_{candidate_index:06d}"
+                try:
+                    shape.Name = candidate
+                except Exception as exc:
+                    raise CorelDrawBridgeError(
+                        f"could not assign a stable working-copy ID for {old_id}"
+                    ) from exc
+                assigned = str(getattr(shape, "Name", "") or "")
+                if assigned != candidate:
+                    raise CorelDrawBridgeError(
+                        f"Corel did not retain the stable working-copy ID for {old_id}"
+                    )
+                reserved.add(candidate)
+                aliases[old_id] = candidate
+            return aliases
 
     def snapshot(self, path: Path) -> CdrInspectionV1:
         guard = source_stat_guard(path)
@@ -152,7 +199,15 @@ class CorelOperatorRuntime:
                             except Exception:
                                 shape.SizeWidth = width
                                 shape.SizeHeight = height
-                        if "x" in current_operation or "y" in current_operation:
+                        if "delta_x" in current_operation or "delta_y" in current_operation:
+                            delta_x = float(current_operation.get("delta_x", 0.0))
+                            delta_y = float(current_operation.get("delta_y", 0.0))
+                            try:
+                                shape.Move(delta_x, delta_y)
+                            except Exception:
+                                shape.PositionX = float(getattr(shape, "PositionX")) + delta_x
+                                shape.PositionY = float(getattr(shape, "PositionY")) + delta_y
+                        elif "x" in current_operation or "y" in current_operation:
                             x = float(
                                 current_operation.get(
                                     "x", getattr(shape, "LeftX", getattr(shape, "PositionX", 0))
@@ -378,26 +433,44 @@ class CorelOperatorRuntime:
                 float(page.SizeWidth),
                 float(page.SizeHeight),
                 unit=unit,
+                page_left=float(getattr(page, "LeftX", 0.0)),
+                page_bottom=float(getattr(page, "BottomY", 0.0)),
                 dpi=dpi,
                 max_dimension=max_dimension,
                 max_pixels=max_pixels,
             )
-            options = application.CreateStructExportOptions()
-            palette = application.CreateStructPaletteOptions()
-            options.ImageType = CDR_RGB_COLOR_IMAGE
-            options.Overwrite = False
-            options.ResolutionX = dpi
-            options.ResolutionY = dpi
-            # Corel's MaintainAspect=True may replace one requested dimension
-            # with an artwork/content-derived value. False preserves the exact
-            # verified page-space frame supplied through SizeX/SizeY.
-            options.MaintainAspect = False
-            options.SizeX = geometry.width_px
-            options.SizeY = geometry.height_px
-            export_filter = document.ExportEx(
-                str(path), CDR_PNG, CDR_CURRENT_PAGE, options, palette
-            )
-            export_filter.Finish()
+            def make_options() -> tuple[Any, Any]:
+                options = application.CreateStructExportOptions()
+                palette = application.CreateStructPaletteOptions()
+                options.ImageType = CDR_RGB_COLOR_IMAGE
+                options.Overwrite = False
+                options.ResolutionX = dpi
+                options.ResolutionY = dpi
+                # Corel's MaintainAspect=True may replace one requested
+                # dimension with an artwork/content-derived value. False
+                # preserves the exact page-derived pixel frame.
+                options.MaintainAspect = False
+                options.SizeX = geometry.width_px
+                options.SizeY = geometry.height_px
+                return options, palette
+
+            options, palette = make_options()
+            try:
+                # Bind raster coordinates directly to the Corel page. Corel
+                # 2020 rejects this for some legacy CDR files; an artwork-fit
+                # export is not an acceptable fallback because its coordinates
+                # move when content changes.
+                options.ExportArea = page.BoundingBox
+                export_filter = document.ExportEx(
+                    str(path), CDR_PNG, CDR_CURRENT_PAGE, options, palette
+                )
+                export_filter.Finish()
+            except Exception as exc:
+                path.unlink(missing_ok=True)
+                raise CanonicalExportError(
+                    "Corel rejected the explicit page-bounding-box export; "
+                    "content-bound fallback is intentionally disabled"
+                ) from exc
         if not path.is_file() or path.stat().st_size == 0:
             raise CorelDrawBridgeError("Corel canonical PNG export produced no file")
         evidence = canonical_export_evidence(path, geometry)
@@ -418,4 +491,4 @@ class CorelOperatorRuntime:
         return exported
 
 
-__all__ = ["CorelOperatorRuntime", "OperatorRuntime"]
+__all__ = ["CanonicalExportError", "CorelOperatorRuntime", "OperatorRuntime"]

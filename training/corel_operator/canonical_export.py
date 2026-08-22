@@ -33,6 +33,8 @@ class CanonicalPageGeometryV1(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     page_width: float = Field(gt=0)
     page_height: float = Field(gt=0)
+    page_left: float = 0.0
+    page_bottom: float = 0.0
     unit: str
     dpi: int = Field(ge=1)
     unbounded_width_px: int = Field(ge=1)
@@ -51,6 +53,7 @@ class CanonicalExportEvidenceV1(StrictModel):
     actual_width_px: int = Field(ge=1)
     actual_height_px: int = Field(ge=1)
     range: Literal["current_page"] = "current_page"
+    export_area: Literal["page_bounding_box"] = "page_bounding_box"
     maintain_aspect: Literal[False] = False
     image_type: Literal["rgb"] = "rgb"
     file_size_bytes: int = Field(ge=1)
@@ -66,6 +69,8 @@ def canonical_page_dimensions(
     page_height: float,
     *,
     unit: str,
+    page_left: float = 0.0,
+    page_bottom: float = 0.0,
     dpi: int = 200,
     max_dimension: int = 2400,
     max_pixels: int = 8_000_000,
@@ -107,6 +112,8 @@ def canonical_page_dimensions(
     return CanonicalPageGeometryV1(
         page_width=width,
         page_height=height,
+        page_left=float(page_left),
+        page_bottom=float(page_bottom),
         unit=normalized_unit,
         dpi=dpi,
         unbounded_width_px=width_pixels,

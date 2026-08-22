@@ -21,6 +21,7 @@ from training.corel_operator.models import (
     ResolvedTargetV1,
 )
 from training.corel_operator.policy import OperatorPolicyError, validate_working_copy_path
+from training.corel_operator.runtime import CanonicalExportError
 from training.corel_operator.service import SafeCorelOperator, _validate_mutation_scope
 from training.corel_operator.targets import resolve_target
 
@@ -78,12 +79,30 @@ class FakeRuntime:
         self.change_untargeted = False
         self.change_page_geometry = False
         self.closed = 0
+        self.object_id_aliases: dict[str, str] = {}
+        self.fail_canonical_export = False
+        self.drift_unrelated_id_on_reopen = False
+        self.open_count = 0
 
     def create_working_copy(self, source: Path, target: Path) -> None:
         target.write_bytes(b"COREL-FAKE-FIXTURE")
 
     def open(self, path: Path) -> None:
         self.is_open = True
+        self.open_count += 1
+        if self.open_count == 2 and self.drift_unrelated_id_on_reopen:
+            self.current.objects[-1].object_id += "_reopened"
+
+    def ensure_stable_object_ids(self, requested_ids: list[str]) -> dict[str, str]:
+        assert set(self.object_id_aliases) <= set(requested_ids)
+        if self.object_id_aliases:
+            for item in self.current.objects:
+                old_id = item.object_id
+                item.object_id = self.object_id_aliases.get(old_id, old_id)
+                item.corel_name = self.object_id_aliases.get(old_id, item.corel_name)
+                if item.parent_id:
+                    item.parent_id = self.object_id_aliases.get(item.parent_id, item.parent_id)
+        return self.object_id_aliases
 
     def snapshot(self, path: Path) -> CdrInspectionV1:
         return self.current.model_copy(deep=True)
@@ -105,6 +124,12 @@ class FakeRuntime:
                 if "font_size" in operation:
                     item.font_size = operation["font_size"]
             elif operation["op"] == "transform":
+                if "delta_x" in operation:
+                    item.bbox["x"] += float(operation["delta_x"])
+                    item.bbox_norm["x"] = item.bbox["x"] / self.current.page_width
+                if "delta_y" in operation:
+                    item.bbox["y"] -= float(operation["delta_y"])
+                    item.bbox_norm["y"] = item.bbox["y"] / self.current.page_height
                 if "x" in operation:
                     item.bbox["x"] = float(operation["x"])
                 if "y" in operation:
@@ -143,6 +168,8 @@ class FakeRuntime:
         max_dimension: int,
         max_pixels: int,
     ) -> CanonicalExportEvidenceV1:
+        if self.fail_canonical_export:
+            raise CanonicalExportError("fixture rejects explicit page area")
         geometry = canonical_page_dimensions(
             self.current.page_width,
             self.current.page_height,
@@ -223,6 +250,86 @@ def test_operator_replaces_unique_text_on_copy_and_reopens(tmp_path: Path) -> No
     assert source.read_bytes() == b"SOURCE"
 
 
+def test_reopen_allows_unrelated_corel_static_id_drift_when_target_persists(
+    tmp_path: Path,
+) -> None:
+    archive, workspace, source, target = _paths(tmp_path)
+    runtime = FakeRuntime(
+        _inspection(
+            [
+                _object("target", "headline", text="Old"),
+                _object("effect", "effect", object_type="vector", x=40),
+            ]
+        )
+    )
+    runtime.drift_unrelated_id_on_reopen = True
+
+    result = SafeCorelOperator(runtime).execute(
+        source_path=source,
+        archive_root=archive,
+        workspace=workspace,
+        working_copy_path=target,
+        plan=_plan(TargetSelectorV1(kind="object_id", value="target")),
+    )
+
+    assert result.result == OperatorResultClass.AUTO_SUCCESS
+    assert result.editability_verified is True
+    assert result.metadata["reopen_identity_drift_count"] == 2
+
+
+def test_operator_holds_pasteboard_target_before_mutation(tmp_path: Path) -> None:
+    archive, workspace, source, target = _paths(tmp_path)
+    item = _object("one", "headline", text="Old")
+    item.metadata.update(
+        {
+            "bbox_clipped_to_page": True,
+            "source_raw_bbox": {
+                "left": -200.0,
+                "bottom": 10.0,
+                "width": 20.0,
+                "height": 5.0,
+            },
+        }
+    )
+    runtime = FakeRuntime(_inspection([item]))
+
+    result = SafeCorelOperator(runtime).execute(
+        source_path=source,
+        archive_root=archive,
+        workspace=workspace,
+        working_copy_path=target,
+        plan=_plan(TargetSelectorV1(kind="exact_text", value="Old")),
+    )
+
+    assert result.result == OperatorResultClass.NEEDS_REVIEW
+    assert result.error_code == "TARGET_OUTSIDE_CANONICAL_PAGE"
+    assert result.transaction_committed is False
+    assert runtime.current.objects[0].text == "Old"
+    assert source.read_bytes() == b"SOURCE"
+
+
+def test_operator_holds_unavailable_canonical_export_before_mutation(
+    tmp_path: Path,
+) -> None:
+    archive, workspace, source, target = _paths(tmp_path)
+    runtime = FakeRuntime(_inspection([_object("one", "headline", text="Old")]))
+    runtime.fail_canonical_export = True
+
+    result = SafeCorelOperator(runtime).execute(
+        source_path=source,
+        archive_root=archive,
+        workspace=workspace,
+        working_copy_path=target,
+        plan=_plan(TargetSelectorV1(kind="exact_text", value="Old")),
+    )
+
+    assert result.result == OperatorResultClass.NEEDS_REVIEW
+    assert result.error_code == "CANONICAL_EXPORT_FAILED"
+    assert result.transaction_committed is False
+    assert runtime.current.objects[0].text == "Old"
+    assert source.read_bytes() == b"SOURCE"
+
+
 def test_ambiguous_text_needs_review_without_mutation(tmp_path: Path) -> None:
     archive, workspace, source, target = _paths(tmp_path)
     runtime = FakeRuntime(
@@ -279,6 +386,54 @@ def test_runtime_failure_isolated_and_document_closed(tmp_path: Path) -> None:
     assert result.error_code == "COREL_RUNTIME_FAILURE"
     assert runtime.is_open is False
     assert source.read_bytes() == b"SOURCE"
+
+
+def test_operator_move_uses_page_space_delta_and_verifies_postcondition(
+    tmp_path: Path,
+) -> None:
+    archive, workspace, source, target = _paths(tmp_path)
+    runtime = FakeRuntime(_inspection([_object("one", "shape", object_type="rectangle", x=10)]))
+    plan = MutationPlanV1(
+        plan_id="move-plan",
+        intent="move one fixture object by one millimetre down and right",
+        source="fixture",
+        actions=[
+            MutationActionV1(
+                operation="move",
+                target=TargetSelectorV1(kind="object_id", value="one"),
+                value={"x": 11.0, "y": 3.0},
+                precondition_object_type="rectangle",
+            )
+        ],
+    )
+    result = SafeCorelOperator(runtime).execute(
+        source_path=source,
+        archive_root=archive,
+        workspace=workspace,
+        working_copy_path=target,
+        plan=plan,
+    )
+    assert result.result == OperatorResultClass.AUTO_SUCCESS
+    assert runtime.current.objects[0].bbox["x"] == 11.0
+    assert runtime.current.objects[0].bbox["y"] == 3.0
+
+
+def test_operator_resolves_source_alias_after_working_copy_id_stabilization(
+    tmp_path: Path,
+) -> None:
+    archive, workspace, source, target = _paths(tmp_path)
+    runtime = FakeRuntime(_inspection([_object("object_1", "object_1", text="Old")]))
+    runtime.object_id_aliases = {"object_1": "codex_operator_000001"}
+    result = SafeCorelOperator(runtime).execute(
+        source_path=source,
+        archive_root=archive,
+        workspace=workspace,
+        working_copy_path=target,
+        plan=_plan(TargetSelectorV1(kind="object_id", value="object_1")),
+    )
+    assert result.result == OperatorResultClass.AUTO_SUCCESS
+    assert result.resolved_targets[0].object_id == "codex_operator_000001"
+    assert result.metadata["stable_id_alias_count"] == 1
 
 
 def test_unexpected_page_geometry_change_triggers_verified_rollback(
@@ -382,6 +537,7 @@ def test_false_parent_dependency_is_rejected() -> None:
         [_object("text", "text", text="Old"), _object("other", "other", text="Other")]
     )
     after = before.model_copy(deep=True)
+    after.objects[0].font_size = 13.0
     action = MutationActionV1(
         operation="set_font_size",
         target=TargetSelectorV1(kind="object_id", value="text"),

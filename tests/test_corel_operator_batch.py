@@ -113,6 +113,16 @@ def test_mutation_pilot_planner_marks_benchmark_phone_replacement() -> None:
     assert plan.actions[0].value == "0900 000 000"
 
 
+def test_targeted_replace_uses_explicit_benchmark_copy_for_unique_text() -> None:
+    plan = DeterministicMutationPilotPlanner(preferred_mode="replace").plan(
+        _inspection(), source_token="source:fixture"
+    )
+    assert plan is not None
+    assert plan.actions[0].value == "BENCHMARK TEST"
+    assert plan.metadata["operation_mode"] == "replace_benchmark_text"
+    assert plan.metadata["benchmark_sample_data"] is True
+
+
 def test_targeted_resize_refuses_text_object() -> None:
     assert (
         DeterministicMutationPilotPlanner(preferred_mode="resize").plan(
@@ -120,6 +130,28 @@ def test_targeted_resize_refuses_text_object() -> None:
         )
         is None
     )
+
+
+def test_multi_mode_builds_one_bounded_two_action_transaction() -> None:
+    inspection = _inspection()
+    item = inspection.objects[0]
+    item.object_type = "rectangle"
+    item.text = None
+    item.font_family = None
+    item.font_size = None
+    inspection.text_object_count = 0
+    inspection.vector_count = 1
+
+    plan = DeterministicMutationPilotPlanner(preferred_mode="multi").plan(
+        inspection,
+        source_token="source:fixture",
+    )
+
+    assert plan is not None
+    assert [action.operation.value for action in plan.actions] == ["move", "resize"]
+    assert {action.target.value for action in plan.actions} == {"headline"}
+    assert plan.metadata["operation_mode"] == "multi_move_resize"
+    assert plan.metadata["single_transaction_required"] is True
 
 
 def test_batch_isolates_failure_and_resumes(tmp_path: Path) -> None:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
+from PIL import Image
 
-from training.corel_operator.runtime import CorelOperatorRuntime
+from training.corel_operator.runtime import CanonicalExportError, CorelOperatorRuntime
 from transaction_engine import DesignTransactionError
 
 
@@ -22,12 +24,17 @@ class Text:
 
 class Shape:
     def __init__(self) -> None:
+        self.Name = ""
         self.Text = Text()
         self.SizeWidth = 10.0
         self.SizeHeight = 2.0
         self.PositionX = 1.0
         self.PositionY = 1.0
         self.RotationAngle = 0.0
+
+    def Move(self, delta_x: float, delta_y: float) -> None:
+        self.PositionX += delta_x
+        self.PositionY += delta_y
 
 
 class Document:
@@ -206,3 +213,170 @@ def test_non_retryable_typography_error_rolls_back_without_second_attempt() -> N
         )
     assert inspector.calls == 2
     assert document.undo_count == 1
+
+
+def test_ambiguous_working_copy_shapes_receive_stable_unique_names() -> None:
+    one = Shape()
+    two = Shape()
+    one.Name = two.Name = "duplicate"
+    document = Document(one)
+    runtime = CorelOperatorRuntime(bridge=Bridge(document))  # type: ignore[arg-type]
+
+    class DuplicateInspector:
+        def _shape_map(self, document):
+            return {"duplicate": one, "duplicate_2": two}, {
+                "duplicate": None,
+                "duplicate_2": None,
+            }
+
+    runtime.inspector = DuplicateInspector()  # type: ignore[assignment]
+    aliases = runtime.ensure_stable_object_ids(["duplicate", "duplicate_2"])
+    assert aliases == {
+        "duplicate": "codex_operator_000001",
+        "duplicate_2": "codex_operator_000002",
+    }
+    assert one.Name != two.Name
+
+
+def test_stable_naming_does_not_touch_unrequested_ambiguous_shapes() -> None:
+    requested = Shape()
+    unrelated = Shape()
+    requested.Name = unrelated.Name = "duplicate"
+    document = Document(requested)
+    runtime = CorelOperatorRuntime(bridge=Bridge(document))  # type: ignore[arg-type]
+
+    class DuplicateInspector:
+        def _shape_map(self, document):
+            return {"duplicate": requested, "duplicate_2": unrelated}, {
+                "duplicate": None,
+                "duplicate_2": None,
+            }
+
+    runtime.inspector = DuplicateInspector()  # type: ignore[assignment]
+    aliases = runtime.ensure_stable_object_ids(["duplicate"])
+    assert aliases == {"duplicate": "codex_operator_000001"}
+    assert unrelated.Name == "duplicate"
+
+
+class _FakeColor:
+    def __init__(self) -> None:
+        self.rgb = (10, 20, 30)
+
+    def RGBAssign(self, red: int, green: int, blue: int) -> None:
+        self.rgb = (red, green, blue)
+
+
+class _FakePage:
+    def __init__(self) -> None:
+        self.SizeWidth = 100.0
+        self.SizeHeight = 50.0
+        self.LeftX = 0.0
+        self.BottomY = 0.0
+        self.BoundingBox = object()
+        self.Background = 0
+        self.PrintExportBackground = False
+        self.Color = _FakeColor()
+
+
+class _FakeExportOptions:
+    pass
+
+
+class _FakeExportFilter:
+    def Finish(self) -> None:
+        return None
+
+
+class _CanonicalApplication:
+    def CreateStructExportOptions(self):
+        return _FakeExportOptions()
+
+    def CreateStructPaletteOptions(self):
+        return object()
+
+
+class _CanonicalDocument:
+    Unit = 3
+
+    def __init__(self, *, reject_explicit_area: bool) -> None:
+        self.ActivePage = _FakePage()
+        self.reject_explicit_area = reject_explicit_area
+        self.export_calls = 0
+        self.undo_count = 0
+        self._page_before: tuple[int, bool, tuple[int, int, int]] | None = None
+
+    def ExportEx(self, path, _format, _range, options, _palette):
+        self.export_calls += 1
+        if self.reject_explicit_area and hasattr(options, "ExportArea"):
+            raise RuntimeError("legacy CDR rejects explicit ExportArea")
+        Image.new("RGB", (options.SizeX, options.SizeY), "white").save(path)
+        return _FakeExportFilter()
+
+    def BeginCommandGroup(self, _name: str) -> None:
+        page = self.ActivePage
+        self._page_before = (
+            page.Background,
+            page.PrintExportBackground,
+            page.Color.rgb,
+        )
+
+    def EndCommandGroup(self) -> None:
+        return None
+
+    def Undo(self) -> None:
+        assert self._page_before is not None
+        page = self.ActivePage
+        page.Background, page.PrintExportBackground, page.Color.rgb = self._page_before
+        self.undo_count += 1
+
+
+class _CanonicalBridge:
+    def __init__(self, document: _CanonicalDocument) -> None:
+        self.application = _CanonicalApplication()
+        self.document = document
+
+    @contextmanager
+    def session(self):
+        yield self.application, self.document
+
+
+def test_canonical_export_prefers_explicit_page_bounding_box(tmp_path: Path) -> None:
+    document = _CanonicalDocument(reject_explicit_area=False)
+    runtime = CorelOperatorRuntime(bridge=_CanonicalBridge(document))  # type: ignore[arg-type]
+
+    evidence = runtime.export_canonical_png(
+        tmp_path / "canonical.png",
+        dpi=100,
+        max_dimension=1000,
+        max_pixels=1_000_000,
+    )
+
+    assert evidence.export_area == "page_bounding_box"
+    assert document.export_calls == 1
+    assert document.undo_count == 0
+
+
+def test_canonical_export_rejects_content_bound_legacy_fallback(tmp_path: Path) -> None:
+    document = _CanonicalDocument(reject_explicit_area=True)
+    original = (
+        document.ActivePage.Background,
+        document.ActivePage.PrintExportBackground,
+        document.ActivePage.Color.rgb,
+    )
+    runtime = CorelOperatorRuntime(bridge=_CanonicalBridge(document))  # type: ignore[arg-type]
+
+    with pytest.raises(CanonicalExportError):
+        runtime.export_canonical_png(
+            tmp_path / "canonical.png",
+            dpi=100,
+            max_dimension=1000,
+            max_pixels=1_000_000,
+        )
+
+    assert document.export_calls == 1
+    assert document.undo_count == 0
+    assert (
+        document.ActivePage.Background,
+        document.ActivePage.PrintExportBackground,
+        document.ActivePage.Color.rgb,
+    ) == original

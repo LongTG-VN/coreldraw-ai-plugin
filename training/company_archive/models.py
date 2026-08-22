@@ -147,6 +147,8 @@ class CdrInspectionV1(StrictModel):
     page_count: int = Field(ge=1)
     page_width: float = Field(gt=0)
     page_height: float = Field(gt=0)
+    page_left: float = 0.0
+    page_bottom: float = 0.0
     unit: str
     corel_unit_code: int
     layer_count: int = Field(ge=0)

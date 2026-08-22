@@ -10,6 +10,7 @@ from training.company_archive.inspector import CompanyCdrInspector
 from training.corel_operator.models import OperatorExecutionResultV1, OperatorResultClass
 from training.corel_operator.planner import DeterministicMutationPilotPlanner
 from training.corel_operator.policy import source_token
+from training.corel_operator.reliability import replay_plan_from_previous_result
 from training.corel_operator.service import SafeCorelOperator
 
 
@@ -26,9 +27,16 @@ def main() -> int:
     source = Path(str(row["absolute_path"])).resolve()
     token = source_token(source, args.archive_root)
     inspection = CompanyCdrInspector().inspect(source, archive_root=args.archive_root)
-    plan = DeterministicMutationPilotPlanner(
-        preferred_mode=str(request.get("planner_mode", "auto"))
-    ).plan(inspection, source_token=token)
+    if request.get("replay_result"):
+        plan = replay_plan_from_previous_result(
+            inspection,
+            dict(request["replay_result"]),
+            source_token=token,
+        )
+    else:
+        plan = DeterministicMutationPilotPlanner(
+            preferred_mode=str(request.get("planner_mode", "auto"))
+        ).plan(inspection, source_token=token)
     if plan is None:
         result = OperatorExecutionResultV1(
             result=OperatorResultClass.UNSUPPORTED,
