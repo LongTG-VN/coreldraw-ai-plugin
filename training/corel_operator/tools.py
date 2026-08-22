@@ -93,6 +93,27 @@ class OperatorToolService:
             "capabilities": inspect_operator_capabilities(inspection).model_dump(mode="json"),
         }
 
+    def build_agent_context(
+        self,
+        file_id: str,
+        *,
+        include_text: bool = False,
+        max_text_candidates: int = 25,
+    ) -> dict[str, Any]:
+        """Build a bounded planner context; customer text is opt-in."""
+
+        # Lazy import keeps the established corel_operator package exports
+        # independent from the optional agent layer built above them.
+        from training.corel_agent.context import build_document_context
+
+        inspection = self.inspect_model(file_id)
+        return build_document_context(
+            inspection,
+            document_id=file_id,
+            include_text=include_text,
+            max_text_candidates=max_text_candidates,
+        ).model_dump(mode="json")
+
     def list_objects(
         self,
         file_id: str,

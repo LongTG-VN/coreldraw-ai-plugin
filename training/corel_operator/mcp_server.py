@@ -41,6 +41,20 @@ def create_mcp_server(
         return service.get_document(file_id)
 
     @mcp.tool()
+    def corel_build_agent_context(
+        file_id: str,
+        include_text: bool = False,
+        max_text_candidates: int = 25,
+    ) -> dict[str, Any]:
+        """Build compact read-only context; document text remains opt-in."""
+
+        return service.build_agent_context(
+            file_id,
+            include_text=include_text,
+            max_text_candidates=max_text_candidates,
+        )
+
+    @mcp.tool()
     def corel_list_objects(
         file_id: str,
         object_type: str | None = None,

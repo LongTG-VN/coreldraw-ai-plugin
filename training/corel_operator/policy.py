@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 from training.company_archive.safety import resolve_source_file
@@ -38,7 +39,13 @@ def validate_working_copy_path(path: Path, workspace: Path, source: Path) -> Pat
 
 def sanitize_error(error: BaseException | str, *, archive_root: Path | None = None) -> str:
     message = str(error).replace("\r", " ").replace("\n", " ")
+    message = re.sub(r"[\\/]+", "/", message)
     if archive_root is not None:
-        message = message.replace(str(archive_root.resolve()), "<ARCHIVE_ROOT>")
-    message = message.replace("\\", "/")
+        normalized_root = str(archive_root.resolve()).replace("\\", "/")
+        message = re.sub(
+            re.escape(normalized_root),
+            "<ARCHIVE_ROOT>",
+            message,
+            flags=re.IGNORECASE,
+        )
     return message[:500]

@@ -134,6 +134,34 @@ def test_controlled_planner_builds_explicit_phone_and_scale_actions() -> None:
     assert plan.metadata["business_values_source"] == "explicit_instruction"
 
 
+def test_controlled_planner_supports_bounded_relative_vietnamese_geometry() -> None:
+    inspection = _inspection(
+        [_object("logo", object_type="rectangle", text=None, x=30)]
+    )
+    request = OperatorTaskRequestV1(
+        file_id=FILE_ID,
+        task_id="relative-geometry",
+        instruction="dịch logo qua phải 2mm; logo lớn thêm 10%",
+    )
+    plan = ControlledInstructionPlanner().plan(request, inspection)
+    assert [item.operation.value for item in plan.actions] == ["move", "resize"]
+    assert plan.actions[0].value == {"x": 32.0, "y": 2.0}
+    assert plan.actions[1].value == {"width": 22.0, "height": 5.5}
+
+
+def test_controlled_planner_supports_exact_old_to_new_price() -> None:
+    inspection = _inspection([_object("price", text="250k")])
+    request = OperatorTaskRequestV1(
+        file_id=FILE_ID,
+        task_id="price-replace",
+        instruction="đổi giá 250k thành 299k",
+    )
+    plan = ControlledInstructionPlanner().plan(request, inspection)
+    assert len(plan.actions) == 1
+    assert plan.actions[0].target.value == "250k"
+    assert plan.actions[0].value == "299k"
+
+
 def test_controlled_planner_fails_closed_on_ambiguous_phone() -> None:
     inspection = _inspection(
         [_object("one", text="0901 234 567"), _object("two", text="0902 345 678")]
@@ -229,6 +257,11 @@ def test_tool_service_resolves_opaque_id_and_sanitizes_output_paths(tmp_path: Pa
     assert not Path(result["working_copy"]).is_absolute()
     assert service.visual_qa(task_id="safe-task")["status"] == "PASS"
 
+    hidden_context = service.build_agent_context(FILE_ID)
+    assert hidden_context["relevant_text"][0]["text_preview"] is None
+    visible_context = service.build_agent_context(FILE_ID, include_text=True)
+    assert visible_context["relevant_text"][0]["text_preview"] == "0901 234 567"
+
 
 def test_autonomous_agent_is_plan_only_by_default_and_runs_after_confirmation(
     tmp_path: Path,
@@ -266,6 +299,7 @@ def test_mcp_exposes_only_bounded_tools_and_requires_confirmation(tmp_path: Path
         names = {tool.name for tool in tools}
         assert names == {
             "corel_get_document",
+            "corel_build_agent_context",
             "corel_list_objects",
             "corel_find_text",
             "corel_plan_task",

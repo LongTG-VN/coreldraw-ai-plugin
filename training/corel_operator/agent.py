@@ -80,6 +80,11 @@ _PRICE_RE = re.compile(
     r"(?P<value>\d[\d., ]{0,12}\s*(?:k|đ|₫|vnd))",
     re.IGNORECASE,
 )
+_EXACT_PRICE_REPLACE_RE = re.compile(
+    r"(?:đổi|thay|sửa)\s+giá\s+(?P<old>\d[\d., ]{0,12}\s*(?:k|đ|₫|vnd))"
+    r"\s+(?:thành|bằng|to)\s+(?P<new>\d[\d., ]{0,12}\s*(?:k|đ|₫|vnd))",
+    re.IGNORECASE,
+)
 _FONT_RE = re.compile(
     r"(?:cỡ\s*chữ|font\s*size)\s+(?P<object_id>[A-Za-z0-9_.:-]+)"
     r"\s*(?:thành|to|=)\s*(?P<value>\d+(?:\.\d+)?)",
@@ -91,6 +96,12 @@ _MOVE_RE = re.compile(
     r"\s*[,;]?\s*y\s*=\s*(?P<y>-?\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
+_MOVE_RELATIVE_RE = re.compile(
+    r"(?:dịch|di\s*chuyển)\s+(?P<object_id>[A-Za-z0-9_.:-]+)\s+"
+    r"(?:qua\s+)?(?P<direction>phải|trái|lên|xuống)\s+"
+    r"(?P<distance>\d+(?:\.\d+)?)\s*mm",
+    re.IGNORECASE,
+)
 _RESIZE_RE = re.compile(
     r"(?:đổi\s*kích\s*thước|resize)\s+(?P<object_id>[A-Za-z0-9_.:-]+)"
     r"\s*(?:thành|to)?\s*width\s*=\s*(?P<width>\d+(?:\.\d+)?)"
@@ -100,6 +111,11 @@ _RESIZE_RE = re.compile(
 _SCALE_RE = re.compile(
     r"(?:tăng|scale\s*up)\s+(?P<object_id>[A-Za-z0-9_.:-]+)"
     r"\s+(?P<percent>\d+(?:\.\d+)?)\s*%",
+    re.IGNORECASE,
+)
+_SCALE_NATURAL_RE = re.compile(
+    r"(?P<object_id>[A-Za-z0-9_.:-]+)\s+(?:lớn|to)\s+thêm\s+"
+    r"(?P<percent>\d+(?:\.\d+)?)\s*%",
     re.IGNORECASE,
 )
 
@@ -132,6 +148,18 @@ class ControlledInstructionPlanner:
                     operation="replace_text",
                     target=selector,
                     value=match.group("new"),
+                    precondition_object_type=target.object_type,
+                )
+            )
+
+        for match in _EXACT_PRICE_REPLACE_RE.finditer(instruction):
+            selector = TargetSelectorV1(kind="exact_text", value=match.group("old").strip())
+            target = self._resolve(inspection, selector)
+            actions.append(
+                MutationActionV1(
+                    operation="replace_text",
+                    target=selector,
+                    value=match.group("new").strip(),
                     precondition_object_type=target.object_type,
                 )
             )
@@ -191,6 +219,25 @@ class ControlledInstructionPlanner:
                 )
             )
 
+        for match in _MOVE_RELATIVE_RE.finditer(instruction):
+            selector = TargetSelectorV1(kind="object_id", value=match.group("object_id"))
+            target = self._resolve(inspection, selector)
+            item = next(obj for obj in inspection.objects if obj.object_id == target.object_id)
+            distance = float(match.group("distance"))
+            if not 0 < distance <= 20:
+                raise TaskPlanningError("VALUE_OUT_OF_BOUNDS", "relative move must be in 0..20 mm")
+            direction = match.group("direction").casefold()
+            delta_x = distance if direction == "phải" else -distance if direction == "trái" else 0
+            delta_y = distance if direction == "xuống" else -distance if direction == "lên" else 0
+            actions.append(
+                MutationActionV1(
+                    operation="move",
+                    target=selector,
+                    value={"x": item.bbox["x"] + delta_x, "y": item.bbox["y"] + delta_y},
+                    precondition_object_type=target.object_type,
+                )
+            )
+
         for match in _RESIZE_RE.finditer(instruction):
             selector = TargetSelectorV1(kind="object_id", value=match.group("object_id"))
             target = self._resolve(inspection, selector)
@@ -207,6 +254,26 @@ class ControlledInstructionPlanner:
             )
 
         for match in _SCALE_RE.finditer(instruction):
+            selector = TargetSelectorV1(kind="object_id", value=match.group("object_id"))
+            target = self._resolve(inspection, selector)
+            item = next(obj for obj in inspection.objects if obj.object_id == target.object_id)
+            percent = float(match.group("percent"))
+            if not 0 < percent <= 20:
+                raise TaskPlanningError("VALUE_OUT_OF_BOUNDS", "scale increase must be in 0..20%")
+            scale = 1 + percent / 100
+            actions.append(
+                MutationActionV1(
+                    operation="resize",
+                    target=selector,
+                    value={
+                        "width": round(item.bbox["width"] * scale, 6),
+                        "height": round(item.bbox["height"] * scale, 6),
+                    },
+                    precondition_object_type=target.object_type,
+                )
+            )
+
+        for match in _SCALE_NATURAL_RE.finditer(instruction):
             selector = TargetSelectorV1(kind="object_id", value=match.group("object_id"))
             target = self._resolve(inspection, selector)
             item = next(obj for obj in inspection.objects if obj.object_id == target.object_id)

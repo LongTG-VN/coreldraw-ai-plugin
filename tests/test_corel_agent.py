@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from training.company_archive.models import CdrInspectionV1, CdrObjectV1
 from training.corel_agent.commands import analyze_vietnamese_command
 from training.corel_agent.context import build_document_context, get_object_details
+from training.corel_agent.evaluation import run_vietnamese_command_benchmark
 from training.corel_agent.jobs import CorelJobStore, task_fingerprint, versioned_output_name
 from training.corel_agent.models import (
     AgentJobStatus,
@@ -22,6 +23,7 @@ from training.corel_agent.provider import (
     PlannerProviderError,
     validate_untrusted_planner_payload,
 )
+from training.corel_operator.policy import sanitize_error
 
 
 FILE_ID = "file:" + "a" * 32
@@ -104,11 +106,11 @@ def test_context_is_bounded_and_can_hide_customer_text() -> None:
         ("logo lớn thêm 10%", "EXPLICIT"),
         ("dịch logo qua phải 2mm", "EXPLICIT"),
         ("đổi giá 250k thành 299k", "EXPLICIT"),
-        ("đổi tên và số điện thoại", "EXPLICIT"),
-        ("giữ nguyên mọi thứ khác", "EXPLICIT"),
-        ("đừng sửa logo", "EXPLICIT"),
-        ("file nào không chắc thì bỏ qua", "EXPLICIT"),
-        ("xuất file PDF", "EXPLICIT"),
+        ("đổi tên và số điện thoại", "PLAN_REVIEW_REQUIRED"),
+        ("giữ nguyên mọi thứ khác", "PLAN_REVIEW_REQUIRED"),
+        ("đừng sửa logo", "PLAN_REVIEW_REQUIRED"),
+        ("file nào không chắc thì bỏ qua", "PLAN_REVIEW_REQUIRED"),
+        ("xuất file PDF", "OUTPUT_ONLY_UNSUPPORTED"),
         ("lưu thành bản mới", "OUTPUT_ONLY_UNSUPPORTED"),
         ("undo", "OUTPUT_ONLY_UNSUPPORTED"),
         ("làm cho đẹp", "PLAN_REVIEW_REQUIRED"),
@@ -176,6 +178,24 @@ def test_agent_policy_rejects_path_and_never_executes_plan_only() -> None:
     assert rejected.accepted is False
     assert rejected.risk_level.value == "DISALLOWED"
     assert "UNSAFE_CODE_OR_PATH_CONTENT" in rejected.errors
+
+
+def test_error_sanitizer_handles_corel_double_slash_paths(tmp_path: Path) -> None:
+    archive = tmp_path / "archive"
+    message = f"Failed to open {str(archive).replace(chr(92), '//')}//customer.cdr"
+    sanitized = sanitize_error(message, archive_root=archive)
+    assert "<ARCHIVE_ROOT>/customer.cdr" in sanitized
+    assert str(tmp_path) not in sanitized
+
+
+def test_vietnamese_command_benchmark_is_hermetic_and_honest() -> None:
+    result = run_vietnamese_command_benchmark()
+    assert result["case_count"] == 24
+    assert result["passed"] == 24
+    assert result["unsafe_case_count"] == 6
+    assert result["unsafe_refused"] == 6
+    assert result["all_passed"] is True
+    assert result["planner_is_ai"] is False
 
 
 def test_job_store_persists_resumes_and_prevents_duplicate_execution(tmp_path: Path) -> None:

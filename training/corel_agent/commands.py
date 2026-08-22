@@ -37,6 +37,8 @@ def analyze_vietnamese_command(instruction: str) -> VietnameseCommandAnalysisV1:
     outputs: list[Literal["CDR", "PDF", "PNG"]] = []
     if any(value in folded for value in _VAGUE):
         reasons.append("VAGUE_OR_UNBOUNDED_INTENT")
+    if "đổi tên và số điện thoại" in folded and not re.search(r"\d", folded):
+        reasons.append("MISSING_EXPLICIT_BUSINESS_VALUES")
     if "giữ nguyên mọi thứ khác" in folded:
         constraints.append("PRESERVE_ALL_UNTARGETED_OBJECTS")
     if "đừng sửa logo" in folded or "không sửa logo" in folded:
@@ -52,13 +54,26 @@ def analyze_vietnamese_command(instruction: str) -> VietnameseCommandAnalysisV1:
 
     normalized = re.sub(r"\b(?:thay|sửa)\s+sđt\b", "số điện thoại", normalized, flags=re.I)
     normalized = re.sub(r"\bsửa\s+phone\b", "phone", normalized, flags=re.I)
+    actionable_text = folded
+    for constraint_phrase in (
+        "giữ nguyên mọi thứ khác",
+        "đừng sửa logo",
+        "không sửa logo",
+        "file nào không chắc thì bỏ qua",
+    ):
+        actionable_text = actionable_text.replace(constraint_phrase, " ")
+    mutation_signal = re.search(
+        r"(?:đổi|thay|sửa|di\s*chuyển|dịch|tăng|resize|move|lớn\s+thêm)",
+        actionable_text,
+    )
     if reasons:
         disposition = "PLAN_REVIEW_REQUIRED"
-    elif any(value in folded for value in _UNSUPPORTED_OUTPUT_ONLY) and not re.search(
-        r"(?:đổi|thay|sửa|di chuyển|tăng|resize|move)", folded
-    ):
+    elif (outputs or any(value in folded for value in _UNSUPPORTED_OUTPUT_ONLY)) and not mutation_signal:
         disposition = "OUTPUT_ONLY_UNSUPPORTED"
         reasons.append("OUTPUT_OR_UNDO_NOT_IN_MUTATION_AUTHORITY")
+    elif constraints and not mutation_signal:
+        disposition = "PLAN_REVIEW_REQUIRED"
+        reasons.append("NO_EXECUTABLE_ACTION")
     else:
         disposition = "EXPLICIT"
     return VietnameseCommandAnalysisV1(
