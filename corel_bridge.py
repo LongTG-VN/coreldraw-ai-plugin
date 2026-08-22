@@ -63,7 +63,14 @@ class CorelDrawBridge:
                 except Exception:
                     app = self._dispatcher("CorelDRAW.Application")
 
-                app.Visible = True
+                try:
+                    app.Visible = True
+                except Exception:
+                    # Some already-visible CorelDRAW 2020 COM instances reject
+                    # the redundant property assignment. Continue only when
+                    # the getter proves the application is already visible.
+                    if not bool(getattr(app, "Visible", False)):
+                        raise
                 doc = getattr(app, "ActiveDocument", None)
                 if doc is None or int(getattr(app.Documents, "Count", 0)) == 0:
                     doc = app.CreateDocument()

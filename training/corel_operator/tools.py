@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 from pathlib import Path
@@ -186,6 +187,10 @@ class OperatorToolService:
         if not _TASK_ID_RE.fullmatch(task_id):
             raise OperatorToolError("invalid task ID")
         task_root = (self.workspace / "runs" / task_id).resolve(strict=False)
+        v2_report = task_root / "visual_qa_v2.json"
+        if v2_report.is_file():
+            payload = json.loads(v2_report.read_text(encoding="utf-8"))
+            return {"task_id": task_id, **payload}
         before = task_root / "working_copy_before.png"
         after = task_root / "working_copy_after.png"
         report = compare_operator_previews(

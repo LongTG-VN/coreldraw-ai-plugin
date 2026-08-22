@@ -4,16 +4,24 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image, ImageDraw
 
 from training.company_archive.models import CdrInspectionV1, CdrObjectV1
+from training.corel_operator.canonical_export import (
+    CanonicalExportEvidenceV1,
+    canonical_export_evidence,
+    canonical_page_dimensions,
+)
 from training.corel_operator.models import (
     MutationActionV1,
+    MutationDependencyV1,
     MutationPlanV1,
     OperatorResultClass,
     TargetSelectorV1,
+    ResolvedTargetV1,
 )
 from training.corel_operator.policy import OperatorPolicyError, validate_working_copy_path
-from training.corel_operator.service import SafeCorelOperator
+from training.corel_operator.service import SafeCorelOperator, _validate_mutation_scope
 from training.corel_operator.targets import resolve_target
 
 
@@ -23,16 +31,19 @@ def _object(
     *,
     text: str | None = None,
     object_type: str = "text",
+    x: float = 1.0,
+    parent_id: str | None = None,
 ) -> CdrObjectV1:
     return CdrObjectV1(
         object_id=object_id,
         corel_name=name,
         object_type=object_type,
-        bbox={"x": 1.0, "y": 2.0, "width": 20.0, "height": 5.0},
-        bbox_norm={"x": 0.01, "y": 0.02, "width": 0.2, "height": 0.05},
+        bbox={"x": x, "y": 2.0, "width": 20.0, "height": 5.0},
+        bbox_norm={"x": x / 100, "y": 0.02, "width": 0.2, "height": 0.05},
         text=text,
         font_family="Arial" if object_type == "text" else None,
         font_size=12.0 if object_type == "text" else None,
+        parent_id=parent_id,
         metadata={"source_page": 1},
     )
 
@@ -124,6 +135,37 @@ class FakeRuntime:
         path.write_bytes(b"PNG")
         return path
 
+    def export_canonical_png(
+        self,
+        path: Path,
+        *,
+        dpi: int,
+        max_dimension: int,
+        max_pixels: int,
+    ) -> CanonicalExportEvidenceV1:
+        geometry = canonical_page_dimensions(
+            self.current.page_width,
+            self.current.page_height,
+            unit=self.current.unit,
+            dpi=dpi,
+            max_dimension=max_dimension,
+            max_pixels=max_pixels,
+        )
+        image = Image.new("RGB", (geometry.width_px, geometry.height_px), "white")
+        draw = ImageDraw.Draw(image)
+        for item in self.current.objects:
+            box = item.bbox_norm
+            bounds = (
+                round(box["x"] * geometry.width_px),
+                round(box["y"] * geometry.height_px),
+                round((box["x"] + box["width"]) * geometry.width_px),
+                round((box["y"] + box["height"]) * geometry.height_px),
+            )
+            shade = 20 + (sum(ord(char) for char in (item.text or item.object_id)) % 180)
+            draw.rectangle(bounds, fill=(shade, shade, shade))
+        image.save(path)
+        return canonical_export_evidence(path, geometry)
+
     def export_pdf(self, path: Path) -> Path:
         path.write_bytes(b"PDF")
         return path
@@ -159,7 +201,12 @@ def _paths(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 def test_operator_replaces_unique_text_on_copy_and_reopens(tmp_path: Path) -> None:
     archive, workspace, source, target = _paths(tmp_path)
     runtime = FakeRuntime(
-        _inspection([_object("one", "headline", text="Old"), _object("two", "body", text="Body")])
+        _inspection(
+            [
+                _object("one", "headline", text="Old"),
+                _object("two", "body", text="Body", x=40),
+            ]
+        )
     )
     result = SafeCorelOperator(runtime).execute(
         source_path=source,
@@ -280,3 +327,73 @@ def test_plan_rejects_unbounded_resize() -> None:
             target=TargetSelectorV1(kind="object_id", value="one"),
             value={"width": -1, "height": 2},
         )
+
+
+def test_declared_direct_parent_bbox_change_is_allowed() -> None:
+    target = _object("text", "text", text="Old", parent_id="group")
+    parent = _object("group", "group", object_type="group", text=None, x=0)
+    before = _inspection([target, parent])
+    after = before.model_copy(deep=True)
+    after.objects[0].font_size = 13.0
+    after.objects[1].bbox["width"] += 1
+    action = MutationActionV1(
+        operation="set_font_size",
+        target=TargetSelectorV1(kind="object_id", value="text"),
+        value=13.0,
+        dependencies=[
+            MutationDependencyV1(
+                object_id="group",
+                kind="DEPENDENT_CONTAINER",
+            )
+        ],
+    )
+    errors = _validate_mutation_scope(
+        before,
+        after,
+        [action],
+        [ResolvedTargetV1(object_id="text", corel_name="text", object_type="text", page=1)],
+    )
+    assert errors == []
+
+
+def test_unrelated_bbox_change_remains_rejected() -> None:
+    before = _inspection(
+        [_object("text", "text", text="Old"), _object("other", "other", text="Other")]
+    )
+    after = before.model_copy(deep=True)
+    after.objects[0].font_size = 13.0
+    after.objects[1].bbox["width"] += 1
+    action = MutationActionV1(
+        operation="set_font_size",
+        target=TargetSelectorV1(kind="object_id", value="text"),
+        value=13.0,
+    )
+    errors = _validate_mutation_scope(
+        before,
+        after,
+        [action],
+        [ResolvedTargetV1(object_id="text", corel_name="text", object_type="text", page=1)],
+    )
+    assert errors == ["object other changed outside policy: bbox"]
+
+
+def test_false_parent_dependency_is_rejected() -> None:
+    before = _inspection(
+        [_object("text", "text", text="Old"), _object("other", "other", text="Other")]
+    )
+    after = before.model_copy(deep=True)
+    action = MutationActionV1(
+        operation="set_font_size",
+        target=TargetSelectorV1(kind="object_id", value="text"),
+        value=13.0,
+        dependencies=[
+            MutationDependencyV1(object_id="other", kind="DEPENDENT_CONTAINER")
+        ],
+    )
+    errors = _validate_mutation_scope(
+        before,
+        after,
+        [action],
+        [ResolvedTargetV1(object_id="text", corel_name="text", object_type="text", page=1)],
+    )
+    assert errors == ["declared dependency other is not the direct parent of target text"]

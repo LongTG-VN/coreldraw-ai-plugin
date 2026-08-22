@@ -39,6 +39,19 @@ class OperationKind(str, Enum):
     SET_FONT_SIZE = "set_font_size"
 
 
+class MutationDependencyKind(str, Enum):
+    DEPENDENT_CONTAINER = "DEPENDENT_CONTAINER"
+    DEPENDENT_TEXT_FRAME = "DEPENDENT_TEXT_FRAME"
+
+
+class MutationDependencyV1(StrictModel):
+    object_id: str = Field(min_length=1, max_length=160)
+    kind: MutationDependencyKind
+    allowed_properties: list[Literal["bbox"]] = Field(
+        default_factory=lambda: ["bbox"], min_length=1, max_length=1
+    )
+
+
 class TargetSelectorV1(StrictModel):
     kind: SelectorKind
     value: str = Field(min_length=1, max_length=500)
@@ -54,6 +67,7 @@ class MutationActionV1(StrictModel):
     allowed_properties: list[str] = Field(default_factory=list, max_length=10)
     maximum_scope: Literal["one_object"] = "one_object"
     precondition_object_type: str | None = Field(default=None, max_length=40)
+    dependencies: list[MutationDependencyV1] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def validate_value(self) -> "MutationActionV1":

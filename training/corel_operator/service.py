@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -12,10 +13,12 @@ from training.corel_operator.models import (
     MutationActionV1,
     MutationPlanV1,
     OperationKind,
+    MutationDependencyKind,
     OperatorExecutionResultV1,
     OperatorResultClass,
     ResolvedTargetV1,
 )
+from training.corel_operator.visual_qa_v2 import compare_visual_integrity_v2
 from training.corel_operator.policy import (
     OperatorPolicyError,
     sanitize_error,
@@ -91,6 +94,29 @@ def _validate_mutation_scope(
     for action, target in zip(actions, targets, strict=True):
         allowed.setdefault(target.object_id, set()).update(_ALLOWED_BY_OPERATION[action.operation])
         allowed[target.object_id].update(action.allowed_properties)
+        target_item = before_map.get(target.object_id)
+        for dependency in action.dependencies:
+            dependency_item = before_map.get(dependency.object_id)
+            if dependency_item is None:
+                errors.append(f"declared dependency {dependency.object_id} is missing")
+                continue
+            if dependency.kind == MutationDependencyKind.DEPENDENT_CONTAINER:
+                if target_item is None or target_item.parent_id != dependency.object_id:
+                    errors.append(
+                        f"declared dependency {dependency.object_id} is not the direct parent "
+                        f"of target {target.object_id}"
+                    )
+                    continue
+            elif dependency.kind == MutationDependencyKind.DEPENDENT_TEXT_FRAME:
+                if target_item is None or dependency.object_id != target.object_id:
+                    errors.append(
+                        f"declared text-frame dependency {dependency.object_id} does not match "
+                        f"target {target.object_id}"
+                    )
+                    continue
+            allowed.setdefault(dependency.object_id, set()).update(
+                dependency.allowed_properties
+            )
     for object_id, before_item in before_map.items():
         left = _tracked_state(before_item)
         right = _tracked_state(after_map[object_id])
@@ -195,7 +221,12 @@ class SafeCorelOperator:
             before = self.runtime.snapshot(target)
             result.object_count_before = before.object_count
             before_preview = target.with_name(target.stem + "_before.png")
-            self.runtime.export_png(before_preview, max_dimension=2400, max_pixels=8_000_000)
+            before_export = self.runtime.export_canonical_png(
+                before_preview,
+                dpi=200,
+                max_dimension=2400,
+                max_pixels=8_000_000,
+            )
             result.preview_before = str(before_preview)
 
             targets: list[ResolvedTargetV1] = []
@@ -232,10 +263,43 @@ class SafeCorelOperator:
                 )
                 raise OperatorPolicyError("; ".join(scope_errors))
 
-            self.runtime.save()
             after_preview = target.with_name(target.stem + "_after.png")
-            self.runtime.export_png(after_preview, max_dimension=2400, max_pixels=8_000_000)
+            after_export = self.runtime.export_canonical_png(
+                after_preview,
+                dpi=200,
+                max_dimension=2400,
+                max_pixels=8_000_000,
+            )
             result.preview_after = str(after_preview)
+            visual_qa = compare_visual_integrity_v2(
+                before,
+                after,
+                before_export,
+                after_export,
+                target_ids=[item.object_id for item in targets],
+                structural_errors=scope_errors,
+            )
+            result.metadata["canonical_export_before"] = before_export.model_dump(mode="json")
+            result.metadata["canonical_export_after"] = after_export.model_dump(mode="json")
+            result.metadata["visual_qa_v2"] = visual_qa.model_dump(mode="json")
+            # Preserve the established metadata key for batch/MCP consumers.
+            result.metadata["visual_qa"] = visual_qa.model_dump(mode="json")
+            (target.parent / "visual_qa_v2.json").write_text(
+                json.dumps(visual_qa.model_dump(mode="json"), indent=2),
+                encoding="utf-8",
+            )
+            if visual_qa.status == "FAIL":
+                self.runtime.undo()
+                rolled_back = self.runtime.snapshot(target)
+                result.rollback_verified = all(
+                    _tracked_state(left) == _tracked_state(right)
+                    for left, right in zip(before.objects, rolled_back.objects, strict=True)
+                )
+                raise OperatorPolicyError(
+                    "visual integrity failure: " + ",".join(visual_qa.reasons)
+                )
+
+            self.runtime.save()
             if export_pdf:
                 pdf = target.with_suffix(".pdf")
                 self.runtime.export_pdf(pdf)
@@ -256,7 +320,11 @@ class SafeCorelOperator:
                 raise OperatorPolicyError("working copy failed editable reopen verification")
             self.runtime.close()
             document_open = False
-            result.result = OperatorResultClass.AUTO_SUCCESS
+            if visual_qa.status == "NEEDS_REVIEW":
+                result.result = OperatorResultClass.NEEDS_REVIEW
+                result.warnings.extend(visual_qa.reasons)
+            else:
+                result.result = OperatorResultClass.AUTO_SUCCESS
         except TargetResolutionError as exc:
             result.result = OperatorResultClass.NEEDS_REVIEW
             result.error_code = "TARGET_NOT_UNIQUE_OR_MISSING"

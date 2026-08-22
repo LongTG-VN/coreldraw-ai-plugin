@@ -14,9 +14,14 @@ from extended_bridge import (
     ExtendedCorelDrawBridge,
     extended_bridge,
 )
-from training.company_archive.inspector import CompanyCdrInspector, bounded_export_size
+from training.company_archive.inspector import COREL_UNITS, CompanyCdrInspector, bounded_export_size
 from training.company_archive.models import CdrInspectionV1
 from training.company_archive.safety import assert_source_unchanged, source_stat_guard
+from training.corel_operator.canonical_export import (
+    CanonicalExportEvidenceV1,
+    canonical_export_evidence,
+    canonical_page_dimensions,
+)
 from transaction_engine import DesignTransactionEngine, DesignTransactionError
 
 
@@ -29,6 +34,14 @@ class OperatorRuntime(Protocol):
     def save(self) -> None: ...
     def close(self) -> None: ...
     def export_png(self, path: Path, *, max_dimension: int, max_pixels: int) -> Path: ...
+    def export_canonical_png(
+        self,
+        path: Path,
+        *,
+        dpi: int,
+        max_dimension: int,
+        max_pixels: int,
+    ) -> CanonicalExportEvidenceV1: ...
     def export_pdf(self, path: Path) -> Path: ...
 
 
@@ -106,7 +119,6 @@ class CorelOperatorRuntime:
         current_index = -1
         current_operation: dict[str, Any] | None = None
         with self.bridge.session() as (_application, document):
-            shape_by_id, _parent_by_id = self.inspector._shape_map(document)
             group_started = False
             group_ended = False
             try:
@@ -114,6 +126,7 @@ class CorelOperatorRuntime:
                 group_started = True
                 for current_index, current_operation in enumerate(operations):
                     object_id = str(current_operation["operator_object_id"])
+                    shape_by_id, _parent_by_id = self.inspector._shape_map(document)
                     shape = shape_by_id.get(object_id)
                     if shape is None:
                         raise CorelDrawBridgeError(
@@ -121,21 +134,11 @@ class CorelOperatorRuntime:
                         )
                     op = str(current_operation.get("op", ""))
                     if op == "typography":
-                        try:
-                            story = shape.Text.Story
-                        except Exception as exc:
-                            raise CorelDrawBridgeError(
-                                f"operator object '{object_id}' is not editable text"
-                            ) from exc
-                        if "text" in current_operation:
-                            try:
-                                story.Text = current_operation["text"]
-                            except Exception:
-                                shape.Text.Story = current_operation["text"]
-                        if "font_name" in current_operation:
-                            story.Font = current_operation["font_name"]
-                        if "font_size" in current_operation:
-                            story.Size = float(current_operation["font_size"])
+                        retry_count = self._apply_typography_with_retry(
+                            document,
+                            object_id=object_id,
+                            operation=current_operation,
+                        )
                     elif op == "transform":
                         if "width" in current_operation or "height" in current_operation:
                             width = float(
@@ -171,9 +174,10 @@ class CorelOperatorRuntime:
                         raise CorelDrawBridgeError(
                             f"operator object transaction does not support: {op}"
                         )
-                    results.append(
-                        {"index": current_index, "op": op, "object_id": object_id}
-                    )
+                    item_result = {"index": current_index, "op": op, "object_id": object_id}
+                    if op == "typography":
+                        item_result["retry_count"] = retry_count
+                    results.append(item_result)
                 document.EndCommandGroup()
                 group_ended = True
             except Exception as exc:
@@ -220,6 +224,57 @@ class CorelOperatorRuntime:
             "operation_count": len(results),
             "results": results,
         }
+
+    @staticmethod
+    def _retryable_text_range_error(exc: Exception) -> bool:
+        cursor: BaseException | None = exc
+        for _ in range(5):
+            if cursor is None:
+                break
+            message = str(cursor).casefold()
+            hresult = getattr(cursor, "hresult", None)
+            if "textrange" in message or hresult in {-2147467259, -2147352567}:
+                return True
+            cursor = cursor.__cause__ or cursor.__context__
+        return False
+
+    @staticmethod
+    def _apply_typography_to_shape(shape: Any, operation: dict[str, Any]) -> None:
+        try:
+            story = shape.Text.Story
+        except Exception as exc:
+            raise CorelDrawBridgeError("operator target is not editable text") from exc
+        if "text" in operation:
+            story.Text = str(operation["text"])
+        if "font_name" in operation:
+            story.Font = str(operation["font_name"])
+        if "font_size" in operation:
+            story.Size = float(operation["font_size"])
+
+    def _apply_typography_with_retry(
+        self,
+        document: Any,
+        *,
+        object_id: str,
+        operation: dict[str, Any],
+        max_attempts: int = 2,
+    ) -> int:
+        """Retry only known TextRange COM failures after reacquiring the live shape."""
+
+        for attempt in range(1, max_attempts + 1):
+            shape_by_id, _parent_by_id = self.inspector._shape_map(document)
+            shape = shape_by_id.get(object_id)
+            if shape is None:
+                raise CorelDrawBridgeError(
+                    f"operator object ID is unavailable during text retry: {object_id}"
+                )
+            try:
+                self._apply_typography_to_shape(shape, operation)
+                return attempt - 1
+            except Exception as exc:
+                if attempt >= max_attempts or not self._retryable_text_range_error(exc):
+                    raise
+        raise AssertionError("bounded typography retry loop did not terminate")
 
     def undo(self) -> None:
         with self.bridge.session() as (_application, document):
@@ -301,6 +356,58 @@ class CorelOperatorRuntime:
         if not path.is_file() or path.stat().st_size == 0:
             raise CorelDrawBridgeError("Corel PNG export produced no file")
         return path
+
+    def export_canonical_png(
+        self,
+        path: Path,
+        *,
+        dpi: int = 200,
+        max_dimension: int = 2400,
+        max_pixels: int = 8_000_000,
+    ) -> CanonicalExportEvidenceV1:
+        """Export the active page into an explicit page-derived pixel frame."""
+
+        if path.exists():
+            raise FileExistsError(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self.bridge.session() as (application, document):
+            page = document.ActivePage
+            unit_code = int(getattr(document, "Unit", -1))
+            unit = COREL_UNITS.get(unit_code, "unknown")
+            geometry = canonical_page_dimensions(
+                float(page.SizeWidth),
+                float(page.SizeHeight),
+                unit=unit,
+                dpi=dpi,
+                max_dimension=max_dimension,
+                max_pixels=max_pixels,
+            )
+            options = application.CreateStructExportOptions()
+            palette = application.CreateStructPaletteOptions()
+            options.ImageType = CDR_RGB_COLOR_IMAGE
+            options.Overwrite = False
+            options.ResolutionX = dpi
+            options.ResolutionY = dpi
+            # Corel's MaintainAspect=True may replace one requested dimension
+            # with an artwork/content-derived value. False preserves the exact
+            # verified page-space frame supplied through SizeX/SizeY.
+            options.MaintainAspect = False
+            options.SizeX = geometry.width_px
+            options.SizeY = geometry.height_px
+            export_filter = document.ExportEx(
+                str(path), CDR_PNG, CDR_CURRENT_PAGE, options, palette
+            )
+            export_filter.Finish()
+        if not path.is_file() or path.stat().st_size == 0:
+            raise CorelDrawBridgeError("Corel canonical PNG export produced no file")
+        evidence = canonical_export_evidence(path, geometry)
+        if not evidence.dimensions_verified:
+            raise CorelDrawBridgeError(
+                "Corel canonical PNG dimensions differed from the page-derived frame: "
+                f"expected {geometry.width_px}x{geometry.height_px}, got "
+                f"{evidence.actual_width_px}x{evidence.actual_height_px}"
+            )
+        return evidence
 
     def export_pdf(self, path: Path) -> Path:
         if path.exists():

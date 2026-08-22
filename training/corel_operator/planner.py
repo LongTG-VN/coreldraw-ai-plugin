@@ -9,9 +9,21 @@ from typing import Protocol
 from training.company_archive.models import CdrInspectionV1, CdrObjectV1
 from training.corel_operator.models import (
     MutationActionV1,
+    MutationDependencyV1,
     MutationPlanV1,
     TargetSelectorV1,
 )
+
+
+def _container_dependency(item: CdrObjectV1) -> list[MutationDependencyV1]:
+    if not item.parent_id:
+        return []
+    return [
+        MutationDependencyV1(
+            object_id=item.parent_id,
+            kind="DEPENDENT_CONTAINER",
+        )
+    ]
 
 
 class StructuredOperatorPlanner(Protocol):
@@ -86,6 +98,7 @@ class DeterministicSafePilotPlanner:
                     ),
                     value=new_size,
                     precondition_object_type="text",
+                    dependencies=_container_dependency(chosen),
                 )
             ],
             metadata={
@@ -169,6 +182,7 @@ class DeterministicMutationPilotPlanner:
                             ),
                             value=replacement,
                             precondition_object_type="text",
+                            dependencies=_container_dependency(chosen),
                         )
                     ],
                     metadata={

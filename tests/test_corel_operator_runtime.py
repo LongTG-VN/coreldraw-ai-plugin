@@ -67,6 +67,39 @@ class Inspector:
         return {"object_1": self.shape}, {"object_1": None}
 
 
+class TextRangeComError(RuntimeError):
+    hresult = -2147467259
+
+
+class FlakyStory:
+    def __init__(self, *, fail_size: bool) -> None:
+        self.Text = "old"
+        self.Font = "Arial"
+        self._size = 10.0
+        self.fail_size = fail_size
+
+    @property
+    def Size(self) -> float:
+        return self._size
+
+    @Size.setter
+    def Size(self, value: float) -> None:
+        if self.fail_size:
+            raise TextRangeComError("TextRange unexpected error")
+        self._size = value
+
+
+class SequencedInspector:
+    def __init__(self, shapes: list[Shape]) -> None:
+        self.shapes = shapes
+        self.calls = 0
+
+    def _shape_map(self, document):
+        index = min(self.calls, len(self.shapes) - 1)
+        self.calls += 1
+        return {"object_1": self.shapes[index]}, {"object_1": None}
+
+
 def _runtime() -> tuple[CorelOperatorRuntime, Shape, Document]:
     shape = Shape()
     document = Document(shape)
@@ -115,4 +148,61 @@ def test_object_transaction_rolls_back_when_later_id_is_missing() -> None:
         )
     assert raised.value.report["rolled_back"] is True
     assert shape.Text.Story.Size == 10.0
+    assert document.undo_count == 1
+
+
+def test_textrange_retry_reacquires_live_shape_once() -> None:
+    stale = Shape()
+    stale.Text.Story = FlakyStory(fail_size=True)
+    live = Shape()
+    live.Text.Story = FlakyStory(fail_size=False)
+    document = Document(live)
+    runtime = CorelOperatorRuntime(bridge=Bridge(document))  # type: ignore[arg-type]
+    # First map is the transaction lookup, second is attempt 1, third is the
+    # bounded retry that must reacquire a fresh COM shape.
+    runtime.inspector = SequencedInspector([stale, stale, live])  # type: ignore[assignment]
+
+    result = runtime.execute_transaction(
+        [
+            {
+                "op": "typography",
+                "shape_name": "unused",
+                "operator_object_id": "object_1",
+                "font_size": 11.0,
+            }
+        ],
+        name="retry-test",
+    )
+
+    assert result["results"][0]["retry_count"] == 1
+    assert live.Text.Story.Size == 11.0
+    assert document.undo_count == 0
+
+
+def test_non_retryable_typography_error_rolls_back_without_second_attempt() -> None:
+    shape = Shape()
+
+    class BrokenText:
+        @property
+        def Story(self):
+            raise ValueError("not a text object")
+
+    shape.Text = BrokenText()
+    document = Document(Shape())
+    runtime = CorelOperatorRuntime(bridge=Bridge(document))  # type: ignore[arg-type]
+    inspector = SequencedInspector([shape, shape])
+    runtime.inspector = inspector  # type: ignore[assignment]
+    with pytest.raises(DesignTransactionError):
+        runtime.execute_transaction(
+            [
+                {
+                    "op": "typography",
+                    "shape_name": "unused",
+                    "operator_object_id": "object_1",
+                    "font_size": 11.0,
+                }
+            ],
+            name="no-retry-test",
+        )
+    assert inspector.calls == 2
     assert document.undo_count == 1
