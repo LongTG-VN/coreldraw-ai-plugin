@@ -62,7 +62,9 @@ def test_balanced_summary_keeps_unsupported_and_failure_separate() -> None:
         {
             "source_token": "source:move:failed",
             "result": "FAILED",
-            "transaction_committed": False,
+            # A mutation can be executed against COM and then fail closed and
+            # roll back before any output is eligible for save/reopen.
+            "transaction_committed": True,
             "editability_verified": False,
             "source_unchanged": True,
             "elapsed_seconds": 3.0,
@@ -78,4 +80,7 @@ def test_balanced_summary_keeps_unsupported_and_failure_separate() -> None:
     assert summary["unsupported"] == 4
     assert summary["failed"] == 1
     assert summary["executed"] == summary["save_reopen_pass"] == 4
+    assert summary["transactions_started"] == 5
+    assert summary["save_reopen_fail"] == 0
+    assert summary["p90_seconds"] == 3.0
     assert summary["source_mutations"] == 0

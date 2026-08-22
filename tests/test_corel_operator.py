@@ -553,3 +553,27 @@ def test_false_parent_dependency_is_rejected() -> None:
         [ResolvedTargetV1(object_id="text", corel_name="text", object_type="text", page=1)],
     )
     assert errors == ["declared dependency other is not the direct parent of target text"]
+
+
+def test_multi_resize_then_move_validates_combined_final_state() -> None:
+    before = _inspection([_object("shape", "shape", object_type="rectangle", text=None)])
+    after = before.model_copy(deep=True)
+    after.objects[0].bbox.update({"x": 2.0, "y": 2.0, "width": 20.2, "height": 5.05})
+    selector = TargetSelectorV1(kind="object_id", value="shape")
+    actions = [
+        MutationActionV1(
+            operation="resize",
+            target=selector,
+            value={"width": 20.2, "height": 5.05},
+        ),
+        MutationActionV1(
+            operation="move",
+            target=selector,
+            value={"x": 2.0, "y": 2.0},
+        ),
+    ]
+    target = ResolvedTargetV1(
+        object_id="shape", corel_name="shape", object_type="rectangle", page=1
+    )
+
+    assert _validate_mutation_scope(before, after, actions, [target, target]) == []

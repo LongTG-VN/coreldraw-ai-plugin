@@ -184,6 +184,9 @@ def _validate_mutation_scope(
             errors.append(
                 f"object {object_id} changed outside policy: {','.join(sorted(unexpected))}"
             )
+    operations_by_target: dict[str, set[OperationKind]] = {}
+    for action, target in zip(actions, targets, strict=True):
+        operations_by_target.setdefault(target.object_id, set()).add(action.operation)
     for action, target in zip(actions, targets, strict=True):
         left_item = before_map.get(target.object_id)
         right_item = after_map.get(target.object_id)
@@ -199,12 +202,18 @@ def _validate_mutation_scope(
                 errors.append(f"target {target.object_id} font size missed requested value")
         elif action.operation == OperationKind.MOVE:
             value = dict(action.value)  # type: ignore[arg-type]
-            if (
+            position_missed = (
                 abs(right_item.bbox["x"] - float(value["x"])) > tolerance
                 or abs(right_item.bbox["y"] - float(value["y"])) > tolerance
-                or abs(right_item.bbox["width"] - left_item.bbox["width"]) > tolerance
-                or abs(right_item.bbox["height"] - left_item.bbox["height"]) > tolerance
-            ):
+            )
+            size_missed = (
+                OperationKind.RESIZE not in operations_by_target[target.object_id]
+                and (
+                    abs(right_item.bbox["width"] - left_item.bbox["width"]) > tolerance
+                    or abs(right_item.bbox["height"] - left_item.bbox["height"]) > tolerance
+                )
+            )
+            if position_missed or size_missed:
                 errors.append(f"target {target.object_id} move postcondition failed")
         elif action.operation == OperationKind.RESIZE:
             value = dict(action.value)  # type: ignore[arg-type]
@@ -455,6 +464,7 @@ class SafeCorelOperator:
                 )
 
             self.runtime.save()
+            result.metadata["save_completed"] = True
             if export_pdf:
                 pdf = target.with_suffix(".pdf")
                 self.runtime.export_pdf(pdf)
@@ -462,9 +472,11 @@ class SafeCorelOperator:
             self.runtime.close()
             document_open = False
 
+            result.metadata["reopen_attempted"] = True
             self.runtime.open(target)
             document_open = True
             reopened = self.runtime.snapshot(target)
+            result.metadata["reopen_completed"] = True
             result.reopened_object_count = reopened.object_count
             after_map = {item.object_id: item for item in after.objects}
             reopened_map = {item.object_id: item for item in reopened.objects}

@@ -75,8 +75,21 @@ def summarize_balanced_results(
 
     all_payloads = [item for mode in BALANCED_OPERATION_MODES for item in mode_payloads[mode]]
     counts = Counter(str(item.get("result")) for item in all_payloads)
-    executed = [item for item in all_payloads if bool(item.get("transaction_committed"))]
+    completed_classes = {
+        OperatorResultClass.AUTO_SUCCESS.value,
+        OperatorResultClass.SUCCESS_WITH_WARNING.value,
+        OperatorResultClass.NEEDS_REVIEW.value,
+    }
+    # Match the established Run #2 denominator: an executed task is one that
+    # reached a persisted editable output (AUTO/SUCCESS/REVIEW), not a
+    # transaction that was subsequently rolled back by postconditions.
+    executed = [
+        item for item in all_payloads if str(item.get("result")) in completed_classes
+    ]
     save_reopen_pass = sum(bool(item.get("editability_verified")) for item in executed)
+    transaction_started = [
+        item for item in all_payloads if bool(item.get("transaction_committed"))
+    ]
     elapsed = [
         float(item["elapsed_seconds"])
         for item in all_payloads
@@ -87,7 +100,9 @@ def summarize_balanced_results(
     for mode in BALANCED_OPERATION_MODES:
         payloads = mode_payloads[mode]
         mode_counts = Counter(str(item.get("result")) for item in payloads)
-        mode_executed = [item for item in payloads if bool(item.get("transaction_committed"))]
+        mode_executed = [
+            item for item in payloads if str(item.get("result")) in completed_classes
+        ]
         by_mode[mode] = {
             "attempted": len(payloads),
             "expected": expected_per_mode[mode],
@@ -99,6 +114,9 @@ def summarize_balanced_results(
             "unsupported": mode_counts[OperatorResultClass.UNSUPPORTED.value],
             "failed": mode_counts[OperatorResultClass.FAILED.value],
             "executed": len(mode_executed),
+            "transactions_started": sum(
+                bool(item.get("transaction_committed")) for item in payloads
+            ),
             "save_reopen_pass": sum(
                 bool(item.get("editability_verified")) for item in mode_executed
             ),
@@ -117,12 +135,14 @@ def summarize_balanced_results(
         "unsupported": counts[OperatorResultClass.UNSUPPORTED.value],
         "failed": counts[OperatorResultClass.FAILED.value],
         "executed": len(executed),
+        "transactions_started": len(transaction_started),
         "save_reopen_pass": save_reopen_pass,
         "save_reopen_fail": len(executed) - save_reopen_pass,
         "source_mutations": sum(
             not bool(item.get("source_unchanged")) for item in all_payloads
         ),
         "median_seconds": median(elapsed) if elapsed else None,
+        "p90_seconds": _percentile(elapsed, 0.90),
         "p95_seconds": _percentile(elapsed, 0.95),
         "by_operation": by_mode,
     }

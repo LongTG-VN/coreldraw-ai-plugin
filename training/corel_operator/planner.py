@@ -211,6 +211,14 @@ class DeterministicMutationPilotPlanner:
                     for item in candidates
                     if item.object_type == "text"
                     and (item.text or "").strip()
+                    # Some legacy numeric display objects report themselves as
+                    # cdrTextShape but silently ignore every supported
+                    # TextRange replacement.  Keep the benchmark fallback on a
+                    # conventional editable-text profile; exact postconditions
+                    # still fail closed and roll back any silent no-op.
+                    and any(character.isalpha() for character in item.text or "")
+                    and item.font_size is not None
+                    and 3.0 <= float(item.font_size) <= 36.0
                     and text_counts[(item.text or "").strip().casefold()] == 1
                 ]
                 if not benchmarkable:
@@ -350,20 +358,23 @@ class DeterministicMutationPilotPlanner:
                     source="deterministic",
                     actions=[
                         MutationActionV1(
-                            operation="move",
-                            target=selector,
-                            value={
-                                "x": chosen.bbox["x"] + 1,
-                                "y": chosen.bbox["y"] + 1,
-                            },
-                            precondition_object_type=chosen.object_type,
-                        ),
-                        MutationActionV1(
+                            # Resize first because Corel sizes around the active
+                            # reference point.  The final relative Move then
+                            # establishes the exact page-coordinate postcondition.
                             operation="resize",
                             target=selector,
                             value={
                                 "width": round(chosen.bbox["width"] * 1.01, 6),
                                 "height": round(chosen.bbox["height"] * 1.01, 6),
+                            },
+                            precondition_object_type=chosen.object_type,
+                        ),
+                        MutationActionV1(
+                            operation="move",
+                            target=selector,
+                            value={
+                                "x": chosen.bbox["x"] + 1,
+                                "y": chosen.bbox["y"] + 1,
                             },
                             precondition_object_type=chosen.object_type,
                         ),

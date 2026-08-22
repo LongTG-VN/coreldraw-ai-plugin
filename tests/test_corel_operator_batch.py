@@ -123,6 +123,20 @@ def test_targeted_replace_uses_explicit_benchmark_copy_for_unique_text() -> None
     assert plan.metadata["benchmark_sample_data"] is True
 
 
+def test_targeted_replace_rejects_numeric_legacy_display_text() -> None:
+    inspection = _inspection()
+    inspection.objects[0].text = "82 "
+    inspection.objects[0].font_size = 50.0
+
+    assert (
+        DeterministicMutationPilotPlanner(preferred_mode="replace").plan(
+            inspection,
+            source_token="source:numeric-display",
+        )
+        is None
+    )
+
+
 def test_targeted_resize_refuses_text_object() -> None:
     assert (
         DeterministicMutationPilotPlanner(preferred_mode="resize").plan(
@@ -148,7 +162,7 @@ def test_multi_mode_builds_one_bounded_two_action_transaction() -> None:
     )
 
     assert plan is not None
-    assert [action.operation.value for action in plan.actions] == ["move", "resize"]
+    assert [action.operation.value for action in plan.actions] == ["resize", "move"]
     assert {action.target.value for action in plan.actions} == {"headline"}
     assert plan.metadata["operation_mode"] == "multi_move_resize"
     assert plan.metadata["single_transaction_required"] is True
