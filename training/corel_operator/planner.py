@@ -248,7 +248,11 @@ class DeterministicMutationPilotPlanner:
                     and any(character.isalpha() for character in item.text or "")
                     and item.font_family
                     and item.font_size is not None
-                    and 3.0 <= float(item.font_size) <= 36.0
+                    # Display headlines are ordinary editable text too.  Keep
+                    # the established 72 pt upper bound used by the bounded
+                    # typography planner instead of excluding safe, stable
+                    # headline objects solely for being larger than body copy.
+                    and 3.0 <= float(item.font_size) <= 72.0
                     and text_counts[(item.text or "").strip().casefold()] == 1
                 ]
                 if not benchmarkable:
@@ -295,7 +299,14 @@ class DeterministicMutationPilotPlanner:
                 and item.bbox["y"] + item.bbox["height"] + 1 <= inspection.page_height
             ]
             if movable:
-                chosen = sorted(movable, key=lambda item: item.object_id)[0]
+                # Real evidence showed both terminal MOVE failures on text
+                # targets while every non-text MOVE succeeded.  Prefer simple
+                # vector/rectangle objects when the same document offers one;
+                # text remains a bounded fallback rather than being disabled.
+                chosen = sorted(
+                    movable,
+                    key=lambda item: (item.object_type == "text", item.object_id),
+                )[0]
                 return MutationPlanV1(
                     plan_id=plan_id,
                     intent="verify a one-millimetre bounded position change on a working copy",

@@ -154,6 +154,56 @@ def test_targeted_replace_rejects_text_without_one_stable_font() -> None:
     )
 
 
+def test_targeted_replace_accepts_stable_large_display_text() -> None:
+    inspection = _inspection()
+    inspection.objects[0].font_size = 56.74
+
+    plan = DeterministicMutationPilotPlanner(preferred_mode="replace").plan(
+        inspection,
+        source_token="source:large-headline",
+    )
+
+    assert plan is not None
+    assert plan.actions[0].target.value == "headline"
+    assert plan.metadata["operation_mode"] == "replace_benchmark_text"
+
+
+def test_targeted_move_prefers_non_text_without_disabling_text_fallback() -> None:
+    inspection = _inspection()
+    inspection.objects[0].object_id = "a_text"
+    vector = inspection.objects[0].model_copy(
+        update={
+            "object_id": "z_vector",
+            "corel_name": "Vector",
+            "object_type": "vector",
+            "text": None,
+            "font_family": None,
+            "font_size": None,
+        }
+    )
+    inspection.objects.append(vector)
+    inspection.object_count = 2
+    inspection.vector_count = 1
+
+    plan = DeterministicMutationPilotPlanner(preferred_mode="move").plan(
+        inspection,
+        source_token="source:prefer-vector",
+    )
+
+    assert plan is not None
+    assert plan.actions[0].target.value == "z_vector"
+
+    inspection.objects = [inspection.objects[0]]
+    inspection.object_count = 1
+    inspection.vector_count = 0
+    fallback = DeterministicMutationPilotPlanner(preferred_mode="move").plan(
+        inspection,
+        source_token="source:text-fallback",
+    )
+    assert fallback is not None
+    assert fallback.actions[0].target.value == "a_text"
+
+
 def test_targeted_resize_refuses_text_object() -> None:
     assert (
         DeterministicMutationPilotPlanner(preferred_mode="resize").plan(
