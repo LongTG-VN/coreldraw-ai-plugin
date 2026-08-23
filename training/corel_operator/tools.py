@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
 from pathlib import Path
 from typing import Any, Protocol
 
 from training.company_archive.inspector import CompanyCdrInspector
 from training.company_archive.models import CdrInspectionV1
-from training.company_archive.safety import resolve_archive_paths, resolve_source_file
+from training.company_archive.safety import (
+    assert_source_unchanged,
+    resolve_archive_paths,
+    resolve_source_file,
+    source_stat_guard,
+)
 from training.corel_operator.capabilities import inspect_operator_capabilities
 from training.corel_operator.models import MutationPlanV1
 from training.corel_operator.planner import validate_planner_output
@@ -203,6 +209,104 @@ class OperatorToolService:
         payload["file_id"] = file_id
         payload["task_id"] = task_id
         return payload
+
+    def export_copy(
+        self,
+        file_id: str,
+        *,
+        task_id: str,
+        formats: list[str],
+    ) -> dict[str, Any]:
+        """Create an editable CDR copy and derivatives without mutating document content."""
+
+        if not _TASK_ID_RE.fullmatch(task_id):
+            raise OperatorToolError("invalid task ID")
+        requested = {value.upper() for value in formats}
+        if not requested or requested - {"CDR", "PDF", "PNG"}:
+            raise OperatorToolError("export formats must be CDR, PDF, and/or PNG")
+        source = self._source(file_id)
+        source_before = source_stat_guard(source)
+        task_root = (self.workspace / "runs" / task_id).resolve(strict=False)
+        task_root.relative_to(self.workspace)
+        target = task_root / "working_copy.cdr"
+        if target.exists():
+            raise OperatorToolError("task output already exists; choose a new task ID")
+        task_root.mkdir(parents=True, exist_ok=False)
+        runtime = self.operator.runtime
+        document_open = False
+        before = None
+        reopened = None
+        try:
+            with self._corel_lock:
+                runtime.create_working_copy(source, target)
+                runtime.open(target)
+                document_open = True
+                before = runtime.snapshot(target)
+                before_preview = task_root / "working_copy_before.png"
+                runtime.export_canonical_png(
+                    before_preview,
+                    dpi=200,
+                    max_dimension=2400,
+                    max_pixels=8_000_000,
+                )
+                shutil.copy2(before_preview, task_root / "working_copy_after.png")
+                if "PDF" in requested:
+                    runtime.export_pdf(task_root / "working_copy.pdf")
+                runtime.close()
+                document_open = False
+                runtime.open(target)
+                document_open = True
+                reopened = runtime.snapshot(target)
+                runtime.close()
+                document_open = False
+        finally:
+            if document_open:
+                try:
+                    runtime.close()
+                except Exception:
+                    pass
+            assert_source_unchanged(source, source_before)
+        if before is None or reopened is None:
+            raise OperatorToolError("export-only editable reopen verification did not complete")
+        editability_verified = (
+            reopened.object_count == before.object_count
+            and {item.object_id for item in reopened.objects}
+            == {item.object_id for item in before.objects}
+        )
+        if not editability_verified:
+            raise OperatorToolError("export-only working copy failed editable reopen verification")
+        return {
+            "result": "AUTO_SUCCESS",
+            "file_id": file_id,
+            "task_id": task_id,
+            "operation_count": 0,
+            "working_copy": target.relative_to(self.workspace).as_posix(),
+            "preview_before": (task_root / "working_copy_before.png")
+            .relative_to(self.workspace)
+            .as_posix(),
+            "preview_after": (task_root / "working_copy_after.png")
+            .relative_to(self.workspace)
+            .as_posix(),
+            "pdf_after": (
+                (task_root / "working_copy.pdf").relative_to(self.workspace).as_posix()
+                if (task_root / "working_copy.pdf").is_file()
+                else None
+            ),
+            "source_unchanged": True,
+            "transaction_committed": False,
+            "rollback_verified": False,
+            "editability_verified": True,
+            "metadata": {
+                "save_completed": True,
+                "reopen_completed": True,
+                "export_only": True,
+                "requested_formats": sorted(requested),
+                "visual_qa_v2": {
+                    "status": "PASS",
+                    "reasons": ["EXPORT_ONLY_NO_MUTATION"],
+                },
+            },
+        }
 
     def visual_qa(self, *, task_id: str) -> dict[str, Any]:
         if not _TASK_ID_RE.fullmatch(task_id):
