@@ -63,7 +63,9 @@ def analyze_vietnamese_command(instruction: str) -> VietnameseCommandAnalysisV1:
     ):
         actionable_text = actionable_text.replace(constraint_phrase, " ")
     mutation_signal = re.search(
-        r"(?:đổi|thay|sửa|di\s*chuyển|dịch|tăng|resize|move|lớn\s+thêm)",
+        r"(?:đổi|thay|sửa|di\s*chuyển|dịch|tăng|resize|move|lớn\s+thêm|"
+        r"(?:số\s+điện\s+thoại|phone|giá)\s+thành|"
+        r"(?:cỡ\s+chữ|font\s+size)\s+\S+\s+thành)",
         actionable_text,
     )
     if reasons:

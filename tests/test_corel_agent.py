@@ -190,8 +190,8 @@ def test_error_sanitizer_handles_corel_double_slash_paths(tmp_path: Path) -> Non
 
 def test_vietnamese_command_benchmark_is_hermetic_and_honest() -> None:
     result = run_vietnamese_command_benchmark()
-    assert result["case_count"] == 24
-    assert result["passed"] == 24
+    assert result["case_count"] == 27
+    assert result["passed"] == 27
     assert result["unsafe_case_count"] == 6
     assert result["unsafe_refused"] == 6
     assert result["all_passed"] is True

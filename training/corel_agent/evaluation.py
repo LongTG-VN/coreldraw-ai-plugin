@@ -29,6 +29,18 @@ VIETNAMESE_COMMAND_CASES: tuple[VietnameseCommandCase, ...] = (
     VietnameseCommandCase("logo_move", "dịch logo qua phải 2mm", "EXPLICIT"),
     VietnameseCommandCase("price_exact", "đổi giá 250k thành 299k", "EXPLICIT"),
     VietnameseCommandCase(
+        "internal_phone", "Số điện thoại thành 0900 000 000; giữ nguyên mọi thứ khác",
+        "EXPLICIT", expected_constraints=("PRESERVE_ALL_UNTARGETED_OBJECTS",),
+    ),
+    VietnameseCommandCase(
+        "internal_price", "Giá thành 99K; giữ nguyên mọi thứ khác", "EXPLICIT",
+        expected_constraints=("PRESERVE_ALL_UNTARGETED_OBJECTS",),
+    ),
+    VietnameseCommandCase(
+        "internal_font_size", "Cỡ chữ object_12 thành 13; giữ nguyên mọi thứ khác",
+        "EXPLICIT", expected_constraints=("PRESERVE_ALL_UNTARGETED_OBJECTS",),
+    ),
+    VietnameseCommandCase(
         "phone_with_preserve",
         "đổi số điện thoại thành 0909 111 222, giữ nguyên mọi thứ khác",
         "EXPLICIT",
