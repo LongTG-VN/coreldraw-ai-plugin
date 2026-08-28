@@ -84,12 +84,42 @@ def _medium_envelope(task_id: str, file_id: str) -> CorelPlanEnvelopeV1:
     )
 
 
+def _medium_resize_envelope(task_id: str, file_id: str) -> CorelPlanEnvelopeV1:
+    envelope = _medium_envelope(task_id, file_id)
+    resized_plan = envelope.plan.model_copy(
+        update={
+            "intent": "resize one explicit benchmark object",
+            "actions": [
+                MutationActionV1(
+                    operation="resize",
+                    target=TargetSelectorV1(
+                        kind="object_id",
+                        value="static_2",
+                        object_type="vector",
+                    ),
+                    value={"width": 105.0, "height": 105.0},
+                    precondition_object_type="vector",
+                )
+            ],
+        }
+    )
+    return envelope.model_copy(
+        update={"goal": "resize one explicit benchmark object", "plan": resized_plan}
+    )
+
+
 class FakePlanner:
     def plan(self, *, file_id: str, task_id: str, instruction: str) -> CodexPlanningResultV1:
         if "mơ hồ" in instruction:
             return CodexPlanningResultV1(
                 status="NEEDS_REVIEW",
                 message="TARGET_AMBIGUOUS",
+            )
+        if "medium resize" in instruction:
+            return CodexPlanningResultV1(
+                status="PLANNED",
+                message="Bounded medium-risk resize plan ready",
+                envelope=_medium_resize_envelope(task_id, file_id),
             )
         if "medium" in instruction:
             return CodexPlanningResultV1(
@@ -259,14 +289,129 @@ def test_medium_risk_plan_is_visibly_held_for_review(tmp_path: Path) -> None:
         "/api/v1/corel-ui/plan",
         json={"file_id": FILE_ID, "instruction": "medium move benchmark"},
     ).json()
-    assert planned["status"] == "NEEDS_REVIEW"
+    assert planned["status"] == "WAITING_MEDIUM_RISK_APPROVAL"
     assert planned["risk"] == "MEDIUM_RISK"
     assert planned["review_required"] is True
     assert planned["can_approve"] is False
+    assert planned["can_approve_medium_risk"] is True
+    assert planned["approval_challenge"]["target_object_ids"] == ["static_2"]
+    assert planned["approval_challenge"]["operations"] == ["move"]
     assert client.post(
         "/api/v1/corel-ui/approve",
         json={"task_id": planned["task_id"], "approved": True},
     ).status_code == 409
+    assert service.execute_calls == 0
+
+
+def test_medium_risk_approval_executes_only_the_exact_plan(tmp_path: Path) -> None:
+    client, service = _app(tmp_path)
+    plan = client.post(
+        "/api/v1/corel-ui/plan",
+        json={"file_id": FILE_ID, "instruction": "medium move benchmark"},
+    ).json()
+    challenge = plan["approval_challenge"]
+    approved = client.post(
+        "/api/v1/corel-ui/medium-risk-approval",
+        json={**challenge, "approved": True},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "APPROVED"
+    assert approved.json()["can_approve"] is True
+
+    executed = client.post(
+        "/api/v1/corel-ui/approve",
+        json={"task_id": plan["task_id"], "approved": True},
+    )
+    assert executed.status_code == 200
+    assert executed.json()["status"] == "AUTO_SUCCESS"
+    assert executed.json()["source_unchanged"] is True
+    assert service.execute_calls == 1
+    stored = client.get(f"/api/v1/corel-ui/jobs/{plan['task_id']}").json()
+    assert stored["status"] == "PASS"
+
+
+def test_medium_risk_resize_approval_preserves_exact_arguments(tmp_path: Path) -> None:
+    client, service = _app(tmp_path)
+    plan = client.post(
+        "/api/v1/corel-ui/plan",
+        json={"file_id": FILE_ID, "instruction": "medium resize benchmark"},
+    ).json()
+    challenge = plan["approval_challenge"]
+    assert challenge["operations"] == ["resize"]
+    assert challenge["operation_arguments"] == [{"width": 105.0, "height": 105.0}]
+    assert client.post(
+        "/api/v1/corel-ui/medium-risk-approval",
+        json={**challenge, "approved": True},
+    ).status_code == 200
+    executed = client.post(
+        "/api/v1/corel-ui/approve",
+        json={"task_id": plan["task_id"], "approved": True},
+    )
+    assert executed.status_code == 200
+    assert executed.json()["status"] == "AUTO_SUCCESS"
+    assert service.execute_calls == 1
+
+
+def test_medium_risk_approval_binds_hash_target_operation_and_arguments(
+    tmp_path: Path,
+) -> None:
+    client, service = _app(tmp_path)
+    plan = client.post(
+        "/api/v1/corel-ui/plan",
+        json={"file_id": FILE_ID, "instruction": "medium move benchmark"},
+    ).json()
+    challenge = plan["approval_challenge"]
+    tampered_values = [
+        {**challenge, "plan_hash": "0" * 64},
+        {**challenge, "target_object_ids": ["static_other"]},
+        {**challenge, "operations": ["resize"]},
+        {**challenge, "operation_arguments": [{"x": 2.0, "y": 0.0}]},
+    ]
+    for tampered in tampered_values:
+        response = client.post(
+            "/api/v1/corel-ui/medium-risk-approval",
+            json={**tampered, "approved": True},
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "STALE_OR_INVALID_MEDIUM_RISK_APPROVAL"
+    assert service.execute_calls == 0
+
+
+def test_medium_risk_approval_is_job_bound_and_cancel_invalidates_it(
+    tmp_path: Path,
+) -> None:
+    client, service = _app(tmp_path)
+    first = client.post(
+        "/api/v1/corel-ui/plan",
+        json={"file_id": FILE_ID, "instruction": "medium move benchmark"},
+    ).json()
+    second = client.post(
+        "/api/v1/corel-ui/plan",
+        json={"file_id": FILE_ID, "instruction": "medium move benchmark regenerated"},
+    ).json()
+    stale = {
+        **first["approval_challenge"],
+        "job_id": second["task_id"],
+        "approved": True,
+    }
+    rejected = client.post("/api/v1/corel-ui/medium-risk-approval", json=stale)
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == "STALE_OR_INVALID_MEDIUM_RISK_APPROVAL"
+
+    approved = client.post(
+        "/api/v1/corel-ui/medium-risk-approval",
+        json={**first["approval_challenge"], "approved": True},
+    )
+    assert approved.status_code == 200
+    canceled = client.post(
+        "/api/v1/corel-ui/cancel", json={"task_id": first["task_id"]}
+    )
+    assert canceled.status_code == 200
+    blocked = client.post(
+        "/api/v1/corel-ui/approve",
+        json={"task_id": first["task_id"], "approved": True},
+    )
+    assert blocked.status_code == 409
     assert service.execute_calls == 0
 
 

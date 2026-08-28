@@ -138,6 +138,31 @@ class PlanValidationV1(StrictModel):
     normalized_action_count: int = Field(ge=0)
 
 
+MediumRiskOperation = Literal["move", "resize"]
+MediumRiskArgument = str | float | dict[str, float]
+
+
+class MediumRiskPlanBindingV1(StrictModel):
+    schema_version: Literal["1.0"] = "1.0"
+    job_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+    plan_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    target_object_ids: list[str] = Field(min_length=1, max_length=10)
+    operations: list[MediumRiskOperation] = Field(min_length=1, max_length=10)
+    operation_arguments: list[MediumRiskArgument] = Field(min_length=1, max_length=10)
+    risk_level: Literal["MEDIUM_RISK"] = "MEDIUM_RISK"
+
+    @model_validator(mode="after")
+    def bind_parallel_action_fields(self) -> "MediumRiskPlanBindingV1":
+        count = len(self.target_object_ids)
+        if len(self.operations) != count or len(self.operation_arguments) != count:
+            raise ValueError("medium-risk action binding fields must have equal lengths")
+        return self
+
+
+class MediumRiskApprovalV1(MediumRiskPlanBindingV1):
+    approved: Literal[True]
+
+
 class CorelOperatorJobV1(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     job_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
@@ -164,6 +189,8 @@ __all__ = [
     "CorelPlanEnvelopeV1",
     "DocumentContextV1",
     "ExecutionMode",
+    "MediumRiskApprovalV1",
+    "MediumRiskPlanBindingV1",
     "OutputRequestV1",
     "PlannerProvenanceV1",
     "PlanValidationV1",

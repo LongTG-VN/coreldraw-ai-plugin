@@ -17,8 +17,18 @@ from fastapi.responses import FileResponse, HTMLResponse
 from PIL import Image, ImageChops, ImageEnhance
 from pydantic import ConfigDict, Field, model_validator
 
+from training.corel_agent.approval import (
+    approval_matches_binding,
+    build_medium_risk_binding,
+)
 from training.corel_agent.commands import analyze_vietnamese_command
-from training.corel_agent.models import CorelAgentRequestV1, CorelPlanEnvelopeV1
+from training.corel_agent.models import (
+    CorelAgentRequestV1,
+    CorelPlanEnvelopeV1,
+    MediumRiskApprovalV1,
+    MediumRiskPlanBindingV1,
+    PlanValidationV1,
+)
 from training.corel_agent.policy import validate_agent_plan
 from training.corel_agent.provider import PlannerProviderError, validate_untrusted_planner_payload
 from training.corel_operator.models import StrictModel
@@ -306,11 +316,34 @@ class _PlanRecord:
     validation: dict[str, Any] | None
     kind: Literal["MUTATION", "EXPORT_ONLY"] = "MUTATION"
     export_formats: list[str] | None = None
+    medium_risk_approval: MediumRiskApprovalV1 | None = None
     canceled: bool = False
     executing: bool = False
     execution: dict[str, Any] | None = None
     output_version: int | None = None
     outputs: dict[str, str] | None = None
+
+
+def _medium_risk_binding(record: _PlanRecord) -> MediumRiskPlanBindingV1 | None:
+    if record.result is None or record.result.envelope is None or record.validation is None:
+        return None
+    try:
+        return build_medium_risk_binding(
+            job_id=record.task_id,
+            envelope=record.result.envelope,
+            validation=PlanValidationV1.model_validate(record.validation),
+        )
+    except ValueError:
+        return None
+
+
+def _valid_medium_risk_approval(record: _PlanRecord) -> bool:
+    binding = _medium_risk_binding(record)
+    return bool(
+        binding is not None
+        and record.medium_risk_approval is not None
+        and approval_matches_binding(record.medium_risk_approval, binding)
+    )
 
 
 def _plan_summary(record: _PlanRecord) -> dict[str, Any]:
@@ -331,6 +364,11 @@ def _plan_summary(record: _PlanRecord) -> dict[str, Any]:
             "review_required": False,
             "policy_errors": [],
             "can_approve": can_approve,
+            "can_approve_medium_risk": False,
+            "approval_challenge": None,
+            "expected_affected_scope": None,
+            "source_policy": "READ_ONLY",
+            "execution_policy": "WORKING_COPY_ONLY",
             "canceled": record.canceled,
             "executed": record.execution is not None,
         }
@@ -350,14 +388,33 @@ def _plan_summary(record: _PlanRecord) -> dict[str, Any]:
                 }
             )
     validation = record.validation or {}
+    medium_binding = _medium_risk_binding(record)
+    medium_approval_valid = _valid_medium_risk_approval(record)
     visible_status = record.result.status
-    if visible_status == "PLANNED" and validation.get("review_required"):
+    if visible_status == "PLANNED" and medium_approval_valid:
+        visible_status = "APPROVED"
+    elif visible_status == "PLANNED" and medium_binding is not None:
+        visible_status = "WAITING_MEDIUM_RISK_APPROVAL"
+    elif visible_status == "PLANNED" and validation.get("review_required"):
         visible_status = "NEEDS_REVIEW"
-    can_approve = bool(
+    low_risk_can_approve = bool(
         record.result.status == "PLANNED"
         and validation.get("accepted")
         and validation.get("risk_level") == "LOW_RISK"
         and not validation.get("review_required")
+        and not record.canceled
+        and not record.executing
+        and record.execution is None
+    )
+    medium_risk_can_execute = bool(
+        medium_approval_valid
+        and not record.canceled
+        and not record.executing
+        and record.execution is None
+    )
+    can_request_medium_approval = bool(
+        medium_binding is not None
+        and not medium_approval_valid
         and not record.canceled
         and not record.executing
         and record.execution is None
@@ -375,7 +432,16 @@ def _plan_summary(record: _PlanRecord) -> dict[str, Any]:
         "risk": validation.get("risk_level", "DISALLOWED"),
         "review_required": validation.get("review_required", True),
         "policy_errors": validation.get("errors", []),
-        "can_approve": can_approve,
+        "can_approve": low_risk_can_approve or medium_risk_can_execute,
+        "can_approve_medium_risk": can_request_medium_approval,
+        "approval_challenge": (
+            medium_binding.model_dump(mode="json") if medium_binding is not None else None
+        ),
+        "expected_affected_scope": (
+            "target only + declared dependencies" if medium_binding is not None else None
+        ),
+        "source_policy": "READ_ONLY",
+        "execution_policy": "WORKING_COPY_ONLY",
         "canceled": record.canceled,
         "executed": record.execution is not None,
     }
@@ -543,6 +609,30 @@ def create_corel_codex_ui_app(
         )
         return summary
 
+    @app.post("/api/v1/corel-ui/medium-risk-approval")
+    def approve_medium_risk(request: MediumRiskApprovalV1) -> dict[str, Any]:
+        value = record(request.job_id)
+        with lock:
+            binding = _medium_risk_binding(value)
+            if (
+                binding is None
+                or value.canceled
+                or value.executing
+                or value.execution is not None
+                or not approval_matches_binding(request, binding)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="STALE_OR_INVALID_MEDIUM_RISK_APPROVAL",
+                )
+            value.medium_risk_approval = request
+            job_store.update(
+                value.task_id,
+                status="APPROVED",
+                message="Exact medium-risk plan approved; execution is still pending",
+            )
+        return _plan_summary(value)
+
     @app.post("/api/v1/corel-ui/approve")
     def approve(request: UiApprovalRequestV1) -> dict[str, Any]:
         value = record(request.task_id)
@@ -567,7 +657,18 @@ def create_corel_codex_ui_app(
                     ),
                     value.result.envelope,
                 )
-                if not confirmed_validation.execution_allowed:
+                if confirmed_validation.risk_level.value == "MEDIUM_RISK":
+                    if (
+                        not confirmed_validation.accepted
+                        or confirmed_validation.errors
+                        or not _valid_medium_risk_approval(value)
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="STALE_OR_INVALID_MEDIUM_RISK_APPROVAL",
+                        )
+                    value.medium_risk_approval = None
+                elif not confirmed_validation.execution_allowed:
                     raise HTTPException(status_code=409, detail="operator policy denied execution")
             value.executing = True
             job_store.update(value.task_id, status="EXECUTING", message="Working-copy task is running")
@@ -643,7 +744,7 @@ def create_corel_codex_ui_app(
         summary = _execution_summary(value)
         job_store.update(
             value.task_id,
-            status=summary["status"],
+            status=_job_terminal_state(summary),
             qa_status=summary["qa"]["status"],
             message=summary["recovery"]["message"],
             source_unchanged=summary["source_unchanged"],
@@ -667,10 +768,11 @@ def create_corel_codex_ui_app(
                     status_code=409,
                     detail="completed working copies are preserved; post-commit undo is unsupported",
                 )
+            value.medium_risk_approval = None
             value.canceled = True
             job_store.update(
                 value.task_id,
-                status="CANCELED",
+                status="CANCELLED",
                 message="Canceled before execution; source remains read-only",
                 source_unchanged=True,
             )
@@ -686,6 +788,7 @@ def create_corel_codex_ui_app(
             )
         if value.execution is None:
             with lock:
+                value.medium_risk_approval = None
                 value.canceled = True
             job_store.update(
                 value.task_id,
@@ -826,6 +929,17 @@ def _execution_summary(record: _PlanRecord) -> dict[str, Any]:
     }
 
 
+def _job_terminal_state(summary: dict[str, Any]) -> str:
+    if summary.get("rollback_verified"):
+        return "ROLLED_BACK"
+    qa_status = summary.get("qa", {}).get("status")
+    if summary.get("status") == "AUTO_SUCCESS" and qa_status == "PASS":
+        return "PASS"
+    if summary.get("status") == "NEEDS_REVIEW" or qa_status == "NEEDS_REVIEW":
+        return "NEEDS_REVIEW"
+    return "FAILED"
+
+
 def _stored_job_summary(record: UiJobRecordV1) -> dict[str, Any]:
     return {
         "task_id": record.task_id,
@@ -867,13 +981,14 @@ button,.button{border:1px solid var(--line);background:#263036;color:var(--text)
 .stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stat{background:var(--panel2);border-radius:8px;padding:10px}.stat b{display:block;font-size:19px}.stat span{color:var(--muted);font-size:11px}
 .top-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:16px}.plan{min-height:260px}.empty{color:var(--muted);display:grid;place-items:center;min-height:120px;text-align:center}.badge{display:inline-flex;padding:5px 8px;border-radius:999px;background:#30383d;font-size:11px;font-weight:800}.badge.pass{background:#17462e;color:#9ae1bd}.badge.review{background:#513f19;color:#f6d889}.badge.fail{background:#512626;color:#ffaaaa}
 .plan-row{display:grid;grid-template-columns:110px 1fr;gap:9px;padding:8px 0;border-bottom:1px solid var(--line)}.plan-row span:first-child{color:var(--muted)}.command-log{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);color:var(--muted);max-height:88px;overflow:auto}.presets{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}.preset{font-size:11px;padding:7px 9px;background:#202a2f}.job{padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer}.job:last-child{border:0}.job strong{display:block}.job small{color:var(--muted)}.settings-grid{display:grid;gap:9px}.settings-grid label{display:flex;justify-content:space-between;gap:12px;align-items:center}.settings-grid input[type=text],.settings-grid select{max-width:145px;background:#0e1214;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px}.recovery{padding:10px;border-radius:8px;background:#151b1f;margin-top:10px;color:var(--muted)}
+.medium-card{margin-top:12px;padding:12px;border:1px solid #8b6a2b;background:#2b2415;border-radius:9px}.medium-card strong{color:var(--amber)}.medium-grid{display:grid;grid-template-columns:130px 1fr;gap:7px;margin-top:9px}.medium-grid span:nth-child(odd){color:var(--muted)}
 .qa{display:grid;grid-template-columns:180px 1fr;gap:14px;align-items:center}.qa-status{font-size:25px;font-weight:900}.preview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.preview{background:#0d1011;border:1px solid var(--line);border-radius:9px;overflow:hidden}.preview h3{font-size:12px;padding:9px 11px;color:var(--muted)}.preview-frame{height:48vh;min-height:300px;background:#d9dcda;display:grid;place-items:center}.preview img{max-width:100%;max-height:100%;object-fit:contain}.outputs{display:flex;gap:9px;flex-wrap:wrap}.agent-message{padding:10px 12px;border-left:3px solid var(--cyan);background:#142326;color:#cbe7e4;border-radius:0 8px 8px 0;margin-top:10px}details{margin-top:12px;color:var(--muted)}pre{white-space:pre-wrap;word-break:break-word;background:#0d1113;padding:10px;border-radius:7px;font-size:11px}
 @media(max-width:1050px){.shell{grid-template-columns:1fr}.top-grid{grid-template-columns:1fr}.preview-grid{grid-template-columns:1fr}.preview-frame{height:55vh}}
 </style></head><body>
 <header><strong>COREL AI OPERATOR · V1</strong><div id="healthBar" class="health"><span class="badge">HEALTH CHECK…</span></div></header>
 <main class="shell"><aside class="sidebar">
 <section class="panel"><h2>Document</h2><div class="source-lock">SOURCE FILE: READ ONLY</div><div class="working" id="working">WORKING COPY: chưa tạo</div><div class="field" style="margin-top:14px"><label>Safe inventory/document ID</label><input id="fileId" placeholder="file:…" value="file:2af26b5496e33f1a4e00f2360ccc7909"></div><button id="inspect" class="primary">Inspect document</button><div id="documentMeta" class="empty">Chưa inspect document</div></section>
-<section class="panel"><h2>Execution controls</h2><div class="actions"><button id="approve" class="primary" disabled>Approve</button><button id="cancel" disabled>Cancel</button><button id="rollback" class="danger" disabled>Undo / Rollback</button></div><p class="working">Mutation chỉ chạy sau khi bạn bấm Approve. Failure tự rollback trong transaction.</p><div class="actions" style="margin-top:12px"><button id="restart">Restart service</button><button id="shutdown">Safe shutdown</button></div></section>
+<section class="panel"><h2>Execution controls</h2><div class="actions"><button id="approve" class="primary" disabled>Approve</button><button id="approveMedium" class="primary" hidden disabled>Approve medium-risk change</button><button id="cancel" disabled>Cancel</button><button id="rollback" class="danger" disabled>Undo / Rollback</button></div><p class="working">Mutation chỉ chạy sau approval phù hợp. Medium-risk phải dùng nút riêng và được bind với exact plan. Failure tự rollback trong transaction.</p><div class="actions" style="margin-top:12px"><button id="restart">Restart service</button><button id="shutdown">Safe shutdown</button></div></section>
 <section class="panel"><h2>Outputs</h2><div id="outputs" class="outputs"><span class="empty">Chưa có output</span></div></section>
 <section class="panel"><h2>Recent jobs</h2><div id="jobs"><span class="empty">Chưa có job</span></div></section>
 <section class="panel"><h2>Settings</h2><div class="settings-grid"><label>Output folder<input id="outputFolder" type="text" value="jobs"></label><label>PDF default<input id="defaultPdf" type="checkbox" checked></label><label>PNG default<input id="defaultPng" type="checkbox" checked></label><label>Preview<select id="previewQuality"><option value="high">High</option><option value="standard">Standard</option></select></label><label>Recent limit<input id="recentLimit" type="text" value="20"></label><button id="saveSettings">Save settings</button></div></section>
@@ -883,7 +998,7 @@ button,.button{border:1px solid var(--line);background:#263036;color:var(--text)
 <section class="panel"><h2>Visual QA</h2><div class="qa"><div id="qaStatus" class="qa-status">WAITING</div><div><div id="qaReason" class="working">Chưa có execution.</div><div id="recovery" class="recovery">Source luôn read-only; mọi output là working copy có version.</div></div></div></section>
 <section class="panel"><h2>Before / After / Diff</h2><div class="preview-grid"><article class="preview"><h3>BEFORE</h3><div class="preview-frame"><img id="before" alt="Before preview"></div></article><article class="preview"><h3>AFTER</h3><div class="preview-frame"><img id="after" alt="After preview"></div></article><article class="preview"><h3>DIFF</h3><div class="preview-frame"><img id="diff" alt="Diff preview"></div></article></div></section>
 </section></main><script>
-const $=id=>document.getElementById(id);let currentTask=null,recent=[];
+const $=id=>document.getElementById(id);let currentTask=null,currentPlan=null,recent=[];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(path,options={}){const response=await fetch(path,{headers:{'Content-Type':'application/json'},...options});const data=await response.json().catch(()=>({detail:response.statusText}));if(!response.ok)throw new Error(data.detail||response.statusText);return data}
 function busy(message){$('agentMessage').textContent=message}
@@ -893,17 +1008,19 @@ async function loadSettings(){const s=await api('/api/v1/corel-ui/settings');$('
 $('saveSettings').onclick=async()=>{try{await api('/api/v1/corel-ui/settings',{method:'PUT',body:JSON.stringify({output_subfolder:$('outputFolder').value,default_pdf_export:$('defaultPdf').checked,default_png_export:$('defaultPng').checked,preview_quality:$('previewQuality').value,recent_job_limit:Number($('recentLimit').value)})});busy('Settings đã lưu local.')}catch(e){showError(e)}};
 document.querySelectorAll('.preset').forEach(button=>button.onclick=()=>{$('instruction').value=button.dataset.template;$('instruction').focus()});
 $('inspect').onclick=async()=>{try{busy('Đang inspect Corel document ở chế độ read-only…');const d=await api('/api/v1/corel-ui/document',{method:'POST',body:JSON.stringify({file_id:$('fileId').value.trim()})});$('documentMeta').className='stats';$('documentMeta').innerHTML='<div class="stat"><b>'+d.page_count+'</b><span>pages</span></div><div class="stat"><b>'+d.object_count+'</b><span>objects</span></div><div class="stat"><b>'+d.text_object_count+'</b><span>editable text</span></div><div class="stat"><b>'+d.vector_count+'</b><span>vectors</span></div>';$('planButton').disabled=false;busy('Inspection PASS · '+d.corel_version)}catch(e){showError(e)}};
-$('planButton').onclick=async()=>{const instruction=$('instruction').value.trim();if(!instruction)return;try{$('planButton').disabled=true;busy('Codex đang inspect qua MCP và lập bounded plan…');const p=await api('/api/v1/corel-ui/plan',{method:'POST',body:JSON.stringify({file_id:$('fileId').value.trim(),instruction})});currentTask=p.task_id;recent.unshift(instruction);$('recent').textContent='Recent commands: '+recent.slice(0,4).join(' · ');renderPlan(p);await loadJobs()}catch(e){showError(e)}finally{$('planButton').disabled=false}};
-function renderPlan(p){const badge=p.status==='PLANNED'?'pass':p.status==='NEEDS_REVIEW'?'review':'fail';$('planPanel').className='';$('planPanel').innerHTML='<div class="actions"><span class="badge '+badge+'">'+esc(p.status)+'</span><span class="badge">RISK '+esc(p.risk)+'</span><span class="badge">'+esc(p.kind)+'</span></div>'+(p.actions.length?p.actions.map(a=>'<div class="plan-row"><span>'+esc(a.operation)+'</span><div><b>'+esc(a.target)+'</b><br><span class="working">'+esc(JSON.stringify(a.value))+'</span></div></div>').join(''):'<div class="empty">Không có executable action.</div>');$('debug').textContent=JSON.stringify(p,null,2);$('approve').disabled=!p.can_approve;$('cancel').disabled=false;$('rollback').disabled=false;busy(p.message+(p.can_approve?' · Chờ bạn Approve.':' · Job bị giữ lại.'));$('qaStatus').textContent=p.status;$('qaStatus').className='qa-status '+badge;$('qaReason').textContent=(p.policy_errors||[]).join(', ')||'Plan-only; chưa mutation.';$('recovery').textContent=p.can_approve?'Kiểm tra plan rồi bấm Approve. Source vẫn read-only.':'Không execute. Làm rõ target/value hoặc chọn object ID ổn định.'}
-$('approve').onclick=async()=>{if(!currentTask)return;try{$('approve').disabled=true;$('cancel').disabled=true;busy('Đã Approve. Operator đang tạo working copy, transaction, QA và save/reopen…');const x=await api('/api/v1/corel-ui/approve',{method:'POST',body:JSON.stringify({task_id:currentTask,approved:true})});renderExecution(x);await loadJobs()}catch(e){showError(e)}};
+$('planButton').onclick=async()=>{const instruction=$('instruction').value.trim();if(!instruction)return;try{$('planButton').disabled=true;busy('Codex đang inspect qua MCP và lập bounded plan…');const p=await api('/api/v1/corel-ui/plan',{method:'POST',body:JSON.stringify({file_id:$('fileId').value.trim(),instruction})});currentTask=p.task_id;currentPlan=p;recent.unshift(instruction);$('recent').textContent='Recent commands: '+recent.slice(0,4).join(' · ');renderPlan(p);await loadJobs()}catch(e){showError(e)}finally{$('planButton').disabled=false}};
+function renderPlan(p){currentPlan=p;const badge=['PLANNED','APPROVED'].includes(p.status)?'pass':['WAITING_MEDIUM_RISK_APPROVAL','NEEDS_REVIEW'].includes(p.status)?'review':'fail';const medium=p.approval_challenge;const mediumCard=medium?'<div class="medium-card"><strong>RISK: MEDIUM</strong><div class="medium-grid"><span>Target</span><b>'+esc(medium.target_object_ids.join(', '))+'</b><span>Action</span><b>'+esc(medium.operations.join(', ').toUpperCase())+'</b><span>Arguments</span><b>'+esc(JSON.stringify(medium.operation_arguments))+'</b><span>Affected scope</span><b>'+esc(p.expected_affected_scope)+'</b><span>Source</span><b>'+esc(p.source_policy)+'</b><span>Execution</span><b>'+esc(p.execution_policy)+'</b></div></div>':'';$('planPanel').className='';$('planPanel').innerHTML='<div class="actions"><span class="badge '+badge+'">'+esc(p.status)+'</span><span class="badge">RISK '+esc(p.risk)+'</span><span class="badge">'+esc(p.kind)+'</span></div>'+(p.actions.length?p.actions.map(a=>'<div class="plan-row"><span>'+esc(a.operation)+'</span><div><b>'+esc(a.target)+'</b><br><span class="working">'+esc(JSON.stringify(a.value))+'</span></div></div>').join(''):'<div class="empty">Không có executable action.</div>')+mediumCard;$('debug').textContent=JSON.stringify(p,null,2);$('approve').disabled=!p.can_approve||p.risk==='MEDIUM_RISK';$('approveMedium').hidden=!p.can_approve_medium_risk;$('approveMedium').disabled=!p.can_approve_medium_risk;$('cancel').disabled=false;$('rollback').disabled=false;busy(p.message+(p.can_approve_medium_risk?' · Cần explicit medium-risk approval.':p.can_approve?' · Chờ bạn Approve.':' · Job bị giữ lại.'));$('qaStatus').textContent=p.status;$('qaStatus').className='qa-status '+badge;$('qaReason').textContent=(p.policy_errors||[]).join(', ')||'Plan-only; chưa mutation.';$('recovery').textContent=p.can_approve_medium_risk?'Kiểm tra target và arguments, rồi dùng nút medium-risk riêng. Source vẫn read-only.':p.can_approve?'Kiểm tra plan rồi bấm Approve. Source vẫn read-only.':'Không execute. Làm rõ target/value hoặc chọn object ID ổn định.'}
+async function executeCurrent(){if(!currentTask)return;$('approve').disabled=true;$('approveMedium').disabled=true;$('cancel').disabled=true;busy('Operator đang tạo working copy, transaction, QA và save/reopen…');const x=await api('/api/v1/corel-ui/approve',{method:'POST',body:JSON.stringify({task_id:currentTask,approved:true})});renderExecution(x);await loadJobs()}
+$('approve').onclick=async()=>{try{await executeCurrent()}catch(e){showError(e)}};
+$('approveMedium').onclick=async()=>{if(!currentTask||!currentPlan?.approval_challenge)return;try{$('approveMedium').disabled=true;busy('Đang bind approval vào exact medium-risk plan…');const approved=await api('/api/v1/corel-ui/medium-risk-approval',{method:'POST',body:JSON.stringify({...currentPlan.approval_challenge,approved:true})});currentPlan=approved;busy('Exact plan đã APPROVED; bắt đầu working-copy execution…');await executeCurrent()}catch(e){showError(e)}};
 function outputButtons(taskId,artifacts){const downloads=Object.entries(artifacts).filter(([kind])=>['cdr','pdf','png'].includes(kind)).map(([kind,url])=>'<a class="button" href="'+url+'">Download '+kind.toUpperCase()+'</a>');const opens=['folder',...Object.keys(artifacts).filter(kind=>['cdr','pdf','png'].includes(kind))].map(kind=>'<button onclick="openOutput(\''+taskId+'\',\''+kind+'\')">Open '+(kind==='folder'?'folder':kind.toUpperCase())+'</button>');return [...downloads,...opens].join('')}
 function showArtifacts(artifacts){['before','after','diff'].forEach(kind=>{$(kind).src=artifacts[kind]?artifacts[kind]+'?v='+Date.now():''})}
 function renderExecution(x){$('working').textContent='WORKING COPY: '+x.status+' · editable='+x.editability_verified+' · v'+String(x.output_version||1).padStart(3,'0');$('qaStatus').textContent=x.qa.status;$('qaStatus').className='qa-status '+(x.qa.status==='PASS'?'pass':x.qa.status==='NEEDS_REVIEW'?'review':'fail');$('qaReason').textContent=(x.qa.reasons||[]).join(', ')||'Không có reason code.';$('recovery').textContent=x.recovery.message+' · '+x.recovery.recommended_action;showArtifacts(x.artifacts);$('outputs').innerHTML=outputButtons(x.task_id,x.artifacts);$('rollback').disabled=false;busy(x.status+' · save='+x.save_completed+' · reopen='+x.reopen_completed+' · source unchanged='+x.source_unchanged);$('debug').textContent=JSON.stringify(x,null,2)}
 async function openOutput(taskId,kind){try{await api('/api/v1/corel-ui/open',{method:'POST',body:JSON.stringify({task_id:taskId,kind})});busy('Đã mở '+kind+' local.')}catch(e){showError(e)}}
 window.openOutput=openOutput;
 async function loadJobs(){try{const data=await api('/api/v1/corel-ui/jobs');$('jobs').innerHTML=data.jobs.length?data.jobs.map(job=>'<div class="job" data-task="'+esc(job.task_id)+'"><strong>'+esc(job.status)+' · '+esc(job.qa_status)+'</strong><small>'+esc(new Date(job.updated_at).toLocaleString())+' · '+esc(job.instruction)+'</small></div>').join(''):'<span class="empty">Chưa có job</span>';document.querySelectorAll('.job').forEach(node=>node.onclick=()=>loadJob(node.dataset.task))}catch(e){showError(e)}}
-async function loadJob(taskId){try{const job=await api('/api/v1/corel-ui/jobs/'+taskId);currentTask=taskId;$('fileId').value=job.file_id;$('instruction').value=job.instruction;$('working').textContent='WORKING COPY: '+job.status+(job.output_version?' · v'+String(job.output_version).padStart(3,'0'):'');$('qaStatus').textContent=job.qa_status;$('qaStatus').className='qa-status '+(job.qa_status==='PASS'?'pass':job.qa_status==='NEEDS_REVIEW'?'review':'fail');$('qaReason').textContent=job.message;$('recovery').textContent=job.source_unchanged===false?'STOP: source safety failed.':'Job local đã được khôi phục từ history.';showArtifacts(job.artifacts);$('outputs').innerHTML=outputButtons(job.task_id,job.artifacts);$('debug').textContent=JSON.stringify(job,null,2)}catch(e){showError(e)}}
-$('cancel').onclick=async()=>{if(!currentTask)return;try{const x=await api('/api/v1/corel-ui/cancel',{method:'POST',body:JSON.stringify({task_id:currentTask})});busy(x.status);$('approve').disabled=true;$('cancel').disabled=true;await loadJobs()}catch(e){showError(e)}};
+async function loadJob(taskId){try{const job=await api('/api/v1/corel-ui/jobs/'+taskId);currentTask=taskId;currentPlan=null;$('fileId').value=job.file_id;$('instruction').value=job.instruction;$('working').textContent='WORKING COPY: '+job.status+(job.output_version?' · v'+String(job.output_version).padStart(3,'0'):'');$('qaStatus').textContent=job.qa_status;$('qaStatus').className='qa-status '+(job.qa_status==='PASS'?'pass':job.qa_status==='NEEDS_REVIEW'?'review':'fail');$('qaReason').textContent=job.message;$('recovery').textContent=job.source_unchanged===false?'STOP: source safety failed.':'Job local đã được khôi phục từ history.';$('approve').disabled=true;$('approveMedium').hidden=true;$('approveMedium').disabled=true;$('cancel').disabled=true;showArtifacts(job.artifacts);$('outputs').innerHTML=outputButtons(job.task_id,job.artifacts);$('debug').textContent=JSON.stringify(job,null,2)}catch(e){showError(e)}}
+$('cancel').onclick=async()=>{if(!currentTask)return;try{const x=await api('/api/v1/corel-ui/cancel',{method:'POST',body:JSON.stringify({task_id:currentTask})});currentPlan=null;busy(x.status);$('approve').disabled=true;$('approveMedium').hidden=true;$('approveMedium').disabled=true;$('cancel').disabled=true;await loadJobs()}catch(e){showError(e)}};
 $('rollback').onclick=async()=>{if(!currentTask)return;try{const x=await api('/api/v1/corel-ui/rollback',{method:'POST',body:JSON.stringify({task_id:currentTask})});busy(x.message||x.status);$('debug').textContent=JSON.stringify(x,null,2)}catch(e){showError(e)}};
 async function lifecycle(action){try{const x=await api('/api/v1/corel-ui/lifecycle',{method:'POST',body:JSON.stringify({action})});busy(x.message||x.status)}catch(e){showError(e)}}
 $('restart').onclick=()=>lifecycle('restart');$('shutdown').onclick=()=>lifecycle('shutdown');
