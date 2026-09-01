@@ -55,6 +55,7 @@ class UiJobRecordV1(StrictModel):
     rollback_verified: bool = False
     output_version: int | None = Field(default=None, ge=1, le=9999)
     outputs: dict[str, str] = Field(default_factory=dict)
+    diagnostic: dict[str, Any] | None = None
     created_at: str
     updated_at: str
 

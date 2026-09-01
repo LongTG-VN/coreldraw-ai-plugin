@@ -106,6 +106,21 @@ class ResolvedTargetV1(StrictModel):
     page: int = Field(ge=1)
 
 
+class CorelFailureDiagnosticV1(StrictModel):
+    """Sanitized failure evidence for one fail-closed Corel operation."""
+
+    stage: str = Field(min_length=1, max_length=80)
+    failing_call: str = Field(min_length=1, max_length=160)
+    hresult: int | None = None
+    exception_type: str = Field(min_length=1, max_length=160)
+    message: str = Field(min_length=1, max_length=500)
+    attempt_number: int = Field(default=1, ge=1, le=10)
+    corel_process_state: str = Field(min_length=1, max_length=40)
+    working_copy_exists: bool
+    transaction_started: bool
+    source_unchanged: bool | None = None
+
+
 class OperatorExecutionResultV1(StrictModel):
     result: OperatorResultClass
     plan_id: str
@@ -126,5 +141,6 @@ class OperatorExecutionResultV1(StrictModel):
     warnings: list[str] = Field(default_factory=list)
     error_code: str | None = None
     error: str | None = None
+    diagnostic: CorelFailureDiagnosticV1 | None = None
     timings_ms: dict[str, float] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -14,6 +17,7 @@ from training.corel_operator.models import (
     MutationPlanV1,
     OperationKind,
     MutationDependencyKind,
+    CorelFailureDiagnosticV1,
     OperatorExecutionResultV1,
     OperatorResultClass,
     ResolvedTargetV1,
@@ -35,6 +39,79 @@ from training.corel_operator.targets import TargetResolutionError, resolve_targe
 
 class CanonicalTargetOutsidePageError(RuntimeError):
     """Raised when page-anchored raster QA cannot see the requested target."""
+
+
+def _corel_process_state() -> str:
+    if os.name != "nt":
+        return "NOT_WINDOWS"
+    try:
+        completed = subprocess.run(
+            ["tasklist.exe", "/FI", "IMAGENAME eq CorelDRW.exe", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "UNKNOWN"
+    return (
+        "RUNNING"
+        if completed.returncode == 0 and "CorelDRW.exe" in completed.stdout
+        else "OFFLINE"
+    )
+
+
+def _exception_chain(error: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(chain) < 10:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _failure_diagnostic(
+    error: BaseException,
+    *,
+    stage: str,
+    failing_call: str,
+    archive_root: Path,
+    workspace: Path,
+    working_copy: Path | None,
+    transaction_started: bool,
+) -> CorelFailureDiagnosticV1:
+    chain = _exception_chain(error)
+    cause = next(
+        (item for item in chain if getattr(item, "hresult", None) is not None),
+        chain[-1],
+    )
+    hresult = getattr(cause, "hresult", None)
+    if not isinstance(hresult, int):
+        hresult = None
+    message = sanitize_error(cause, archive_root=archive_root)
+    normalized_workspace = str(workspace.resolve()).replace("\\", "/")
+    message = re.sub(
+        re.escape(normalized_workspace),
+        "<WORKSPACE>",
+        message,
+        flags=re.IGNORECASE,
+    )[:500]
+    return CorelFailureDiagnosticV1(
+        stage=stage,
+        failing_call=failing_call,
+        hresult=hresult,
+        exception_type=type(cause).__name__,
+        message=message,
+        attempt_number=1,
+        corel_process_state=_corel_process_state(),
+        working_copy_exists=bool(working_copy and working_copy.is_file()),
+        transaction_started=transaction_started,
+    )
 
 
 def _object_intersects_page(
@@ -312,15 +389,24 @@ class SafeCorelOperator:
         )
         target = None
         document_open = False
+        diagnostic_stage = "WORKING_COPY_PATH_VALIDATE"
+        diagnostic_call = "validate_working_copy_path"
+        transaction_started = False
         try:
             target = validate_working_copy_path(working_copy_path, workspace, source)
             result.working_copy = str(target)
             copy_started = time.perf_counter()
+            diagnostic_stage = "COPY_CREATED"
+            diagnostic_call = "CorelOperatorRuntime.create_working_copy"
             self.runtime.create_working_copy(source, target)
             result.timings_ms["copy"] = (time.perf_counter() - copy_started) * 1000
 
+            diagnostic_stage = "DOCUMENT_OPEN"
+            diagnostic_call = "CorelDrawBridge.open_document"
             self.runtime.open(target)
             document_open = True
+            diagnostic_stage = "DOCUMENT_INSPECT"
+            diagnostic_call = "CorelOperatorRuntime.ensure_stable_object_ids"
             ensure_ids = getattr(self.runtime, "ensure_stable_object_ids", None)
             requested_ids = [
                 action.target.value
@@ -332,6 +418,8 @@ class SafeCorelOperator:
                 for dependency in action.dependencies
             ]
             object_id_aliases = ensure_ids(requested_ids) if callable(ensure_ids) else {}
+            diagnostic_stage = "SNAPSHOT_BEFORE"
+            diagnostic_call = "CorelOperatorRuntime.snapshot"
             before = self.runtime.snapshot(target)
             result.object_count_before = before.object_count
 
@@ -382,6 +470,8 @@ class SafeCorelOperator:
                 )
 
             before_preview = target.with_name(target.stem + "_before.png")
+            diagnostic_stage = "PREVIEW_BEFORE"
+            diagnostic_call = "CorelOperatorRuntime.export_canonical_png"
             before_export = self.runtime.export_canonical_png(
                 before_preview,
                 dpi=200,
@@ -390,7 +480,7 @@ class SafeCorelOperator:
             )
             result.preview_before = str(before_preview)
 
-            transaction_started = time.perf_counter()
+            transaction_timer_started = time.perf_counter()
             operations = [
                 _operation_payload(
                     action,
@@ -399,11 +489,14 @@ class SafeCorelOperator:
                 )
                 for action, resolved in zip(normalized_actions, targets, strict=True)
             ]
+            diagnostic_stage = "TRANSACTION"
+            diagnostic_call = "CorelOperatorRuntime.execute_transaction"
+            transaction_started = True
             self.runtime.execute_transaction(operations, name=f"Corel Operator: {plan.plan_id}")
             result.transaction_committed = True
             result.operation_count = len(operations)
             result.timings_ms["transaction"] = (
-                time.perf_counter() - transaction_started
+                time.perf_counter() - transaction_timer_started
             ) * 1000
 
             after = self.runtime.snapshot(target)
@@ -525,6 +618,15 @@ class SafeCorelOperator:
             result.result = OperatorResultClass.FAILED
             result.error_code = "COREL_RUNTIME_FAILURE"
             result.error = sanitize_error(exc, archive_root=archive_root)
+            result.diagnostic = _failure_diagnostic(
+                exc,
+                stage=diagnostic_stage,
+                failing_call=diagnostic_call,
+                archive_root=archive_root,
+                workspace=workspace,
+                working_copy=target,
+                transaction_started=bool(transaction_started),
+            )
         finally:
             if document_open:
                 try:
@@ -541,6 +643,10 @@ class SafeCorelOperator:
                 result.result = OperatorResultClass.FAILED
                 result.error_code = "SOURCE_MUTATION_DETECTED"
                 result.error = sanitize_error(exc, archive_root=archive_root)
+            if result.diagnostic is not None:
+                result.diagnostic = result.diagnostic.model_copy(
+                    update={"source_unchanged": result.source_unchanged}
+                )
             result.timings_ms["total"] = (time.perf_counter() - started) * 1000
         return result
 

@@ -388,6 +388,53 @@ def test_runtime_failure_isolated_and_document_closed(tmp_path: Path) -> None:
     assert source.read_bytes() == b"SOURCE"
 
 
+def test_working_copy_com_failure_preserves_sanitized_stage_and_hresult(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive, workspace, source, target = _paths(tmp_path)
+
+    class FixtureComError(Exception):
+        hresult = -2147352567
+
+    class FailingOpenRuntime(FakeRuntime):
+        def open(self, path: Path) -> None:
+            try:
+                raise FixtureComError(
+                    f"COM rejected {source} while opening {path}"
+                )
+            except FixtureComError as exc:
+                raise RuntimeError("wrapped Corel open failure") from exc
+
+    monkeypatch.setattr(
+        "training.corel_operator.service._corel_process_state", lambda: "RUNNING"
+    )
+    runtime = FailingOpenRuntime(_inspection([_object("one", "shape", object_type="vector")]))
+    result = SafeCorelOperator(runtime).execute(
+        source_path=source,
+        archive_root=archive,
+        workspace=workspace,
+        working_copy_path=target,
+        plan=_plan(TargetSelectorV1(kind="object_id", value="one")),
+    )
+
+    assert result.result == OperatorResultClass.FAILED
+    assert result.error_code == "COREL_RUNTIME_FAILURE"
+    assert result.diagnostic is not None
+    assert result.diagnostic.stage == "DOCUMENT_OPEN"
+    assert result.diagnostic.failing_call == "CorelDrawBridge.open_document"
+    assert result.diagnostic.hresult == -2147352567
+    assert result.diagnostic.exception_type == "FixtureComError"
+    assert result.diagnostic.attempt_number == 1
+    assert result.diagnostic.corel_process_state == "RUNNING"
+    assert result.diagnostic.working_copy_exists is True
+    assert result.diagnostic.transaction_started is False
+    assert result.diagnostic.source_unchanged is True
+    assert "<ARCHIVE_ROOT>" in result.diagnostic.message
+    assert "<WORKSPACE>" in result.diagnostic.message
+    assert str(source) not in result.diagnostic.message
+    assert str(target) not in result.diagnostic.message
+
+
 def test_operator_move_uses_page_space_delta_and_verifies_postcondition(
     tmp_path: Path,
 ) -> None:

@@ -255,6 +255,7 @@ def test_ui_full_approval_flow_is_working_copy_only(tmp_path: Path) -> None:
     assert result["source_unchanged"] is True
     assert result["editability_verified"] is True
     assert result["qa"]["status"] == "PASS"
+    assert result["diagnostic"] is None
     assert service.execute_calls == 1
     for kind in ("before", "after", "diff", "cdr", "pdf", "png"):
         assert client.get(result["artifacts"][kind]).status_code == 200
@@ -328,6 +329,68 @@ def test_medium_risk_approval_executes_only_the_exact_plan(tmp_path: Path) -> No
     assert service.execute_calls == 1
     stored = client.get(f"/api/v1/corel-ui/jobs/{plan['task_id']}").json()
     assert stored["status"] == "PASS"
+
+
+def test_runtime_diagnostic_is_exposed_and_persisted_without_breaking_job_api(
+    tmp_path: Path,
+) -> None:
+    class DiagnosticService(FakeService):
+        def execute_plan(self, file_id: str, *, task_id: str, plan) -> dict:
+            assert file_id == FILE_ID
+            self.execute_calls += 1
+            root = self.workspace / "runs" / task_id
+            root.mkdir(parents=True)
+            (root / "working_copy.cdr").write_bytes(b"FAKE-TEST-CDR")
+            return {
+                "result": "FAILED",
+                "operation_count": 0,
+                "source_unchanged": True,
+                "transaction_committed": False,
+                "rollback_verified": False,
+                "editability_verified": False,
+                "error_code": "COREL_RUNTIME_FAILURE",
+                "diagnostic": {
+                    "stage": "DOCUMENT_OPEN",
+                    "failing_call": "CorelDrawBridge.open_document",
+                    "hresult": -2147352567,
+                    "exception_type": "com_error",
+                    "message": "Corel open failed at <WORKSPACE>",
+                    "attempt_number": 1,
+                    "corel_process_state": "RUNNING",
+                    "working_copy_exists": True,
+                    "transaction_started": False,
+                    "source_unchanged": True,
+                },
+            }
+
+    service = DiagnosticService(tmp_path)
+    client = TestClient(
+        create_corel_codex_ui_app(
+            service=service,  # type: ignore[arg-type]
+            planner=FakePlanner(),
+            workspace=tmp_path,
+        )
+    )
+    planned = client.post(
+        "/api/v1/corel-ui/plan",
+        json={"file_id": FILE_ID, "instruction": "medium move benchmark"},
+    ).json()
+    challenge = planned["approval_challenge"]
+    assert client.post(
+        "/api/v1/corel-ui/medium-risk-approval",
+        json={**challenge, "approved": True},
+    ).status_code == 200
+
+    executed = client.post(
+        "/api/v1/corel-ui/approve",
+        json={"task_id": planned["task_id"], "approved": True},
+    )
+    assert executed.status_code == 200
+    assert executed.json()["diagnostic"]["stage"] == "DOCUMENT_OPEN"
+    stored = client.get(f"/api/v1/corel-ui/jobs/{planned['task_id']}")
+    assert stored.status_code == 200
+    assert stored.json()["diagnostic"]["hresult"] == -2147352567
+    assert stored.json()["file_id"] == FILE_ID
 
 
 def test_medium_risk_resize_approval_preserves_exact_arguments(tmp_path: Path) -> None:

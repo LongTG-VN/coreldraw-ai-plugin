@@ -751,6 +751,7 @@ def create_corel_codex_ui_app(
             rollback_verified=summary["rollback_verified"],
             output_version=output_version,
             outputs=outputs,
+            diagnostic=summary.get("diagnostic"),
         )
         return summary
 
@@ -922,6 +923,7 @@ def _execution_summary(record: _PlanRecord) -> dict[str, Any]:
             "reasons": visual.get("reasons", visual.get("issues", [])),
         },
         "recovery": recovery,
+        "diagnostic": execution.get("diagnostic"),
         "artifacts": {
             name: f"/api/v1/corel-ui/artifact/{record.task_id}/{name}"
             for name in (record.outputs or {})
@@ -954,6 +956,7 @@ def _stored_job_summary(record: UiJobRecordV1) -> dict[str, Any]:
         "output_version": record.output_version,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
+        "diagnostic": record.diagnostic,
         "artifacts": {
             name: f"/api/v1/corel-ui/artifact/{record.task_id}/{name}"
             for name in record.outputs
