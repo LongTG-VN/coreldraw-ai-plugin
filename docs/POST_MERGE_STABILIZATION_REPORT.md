@@ -94,7 +94,10 @@ vision critic research remain disabled; no training or research run occurred.
 # TESTS
 
 The suite map is documented in `TEST_SUITE_MAP.md`. Final verification is
-recorded at branch finalization; the baseline was 467/467 passing.
+467/467 passing locally. GitHub Actions run `33476459405` verified stabilization
+commit `50d34da` on Python 3.10, 3.11, and 3.12; compile and pytest passed in all
+three jobs. The runner emitted a non-failing notice that v4/v5 GitHub actions
+are being forced from deprecated Node.js 20 to Node.js 24.
 
 # LIMITATIONS
 
