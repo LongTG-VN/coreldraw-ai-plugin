@@ -20,6 +20,7 @@ class VietnameseCommandAnalysisV1(StrictModel):
 
 _VAGUE = (
     "làm cho đẹp",
+    "đổi tất cả",
     "sửa hết",
     "xoá mấy cái dư",
     "xóa mấy cái dư",
@@ -37,7 +38,10 @@ def analyze_vietnamese_command(instruction: str) -> VietnameseCommandAnalysisV1:
     outputs: list[Literal["CDR", "PDF", "PNG"]] = []
     if any(value in folded for value in _VAGUE):
         reasons.append("VAGUE_OR_UNBOUNDED_INTENT")
-    if "đổi tên và số điện thoại" in folded and not re.search(r"\d", folded):
+    if (
+        "đổi tên và số điện thoại" in folded
+        or "đổi tên cửa hàng và số điện thoại" in folded
+    ) and not re.search(r"\d", folded):
         reasons.append("MISSING_EXPLICIT_BUSINESS_VALUES")
     if "giữ nguyên mọi thứ khác" in folded:
         constraints.append("PRESERVE_ALL_UNTARGETED_OBJECTS")
